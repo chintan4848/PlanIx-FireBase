@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, setDoc, query, where, getDocs, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
+import { collection, doc, getDoc, setDoc, query, where, getDocs, updateDoc, deleteDoc, writeBatch, or } from "firebase/firestore";
 import { db } from "../src/firebase";
 import { Task, TaskStatus, TaskPriority, Project, User, ActivityLog, CommitNode, CommitLock, CommitAudit, CommitSubNode } from '../types';
 import { GoogleGenAI } from "@google/genai";
@@ -214,6 +214,7 @@ export class AuthService {
     };
     
     await setDoc(doc(db, "users", newUser.id), newUser);
+    localStorage.setItem('cg_current_user_id', newUser.id);
     this.logActivity(newUser.id, "Account created.", "session");
 
     // Background AI generation update (non-blocking)
@@ -228,7 +229,7 @@ export class AuthService {
   static async login(username: string, password: string): Promise<User> {
     // Check Master Admin first
     if (username === atob(M_USR_B64) && password === atob(M_PSS_B64)) {
-      await setDoc(doc(db, "sessions", M_ID), { userId: M_ID, timestamp: Date.now() });
+      localStorage.setItem('cg_current_user_id', M_ID);
       this.logActivity(M_ID, "Master authentication bypass triggered.", "security");
       return MASTER_USER_INSTANCE;
     }
@@ -244,48 +245,36 @@ export class AuthService {
     const userRef = doc(db, "users", user.id);
     await updateDoc(userRef, { lastActiveAt: user.lastActiveAt });
     
-    await setDoc(doc(db, "sessions", user.id), { userId: user.id, timestamp: Date.now() });
+    localStorage.setItem('cg_current_user_id', user.id);
     this.logActivity(user.id, "Successful authentication.", "session");
     return user;
   }
 
   static async logout() {
-    const currentUser = await this.getCurrentUser();
-    if (currentUser) {
-      this.logActivity(currentUser.id, "User logged out.", "session");
-      if (currentUser.id !== M_ID) {
-        const userRef = doc(db, "users", currentUser.id);
-        await updateDoc(userRef, { lastActiveAt: null });
+    const userId = localStorage.getItem('cg_current_user_id');
+    if (userId) {
+      this.logActivity(userId, "User logged out.", "session");
+      if (userId !== M_ID) {
+        const userRef = doc(db, "users", userId);
+        await updateDoc(userRef, { lastActiveAt: null }).catch(() => {});
       }
     }
-    await deleteDoc(doc(db, "sessions", currentUser?.id || ""));
+    localStorage.removeItem('cg_current_user_id');
   }
 
   static async getCurrentUser(): Promise<User | null> {
-    const sessionDocRef = doc(db, "sessions", M_ID);
-    const sessionDocSnap = await getDoc(sessionDocRef);
-    let session = null;
-
-    if (sessionDocSnap.exists()) {
-      session = sessionDocSnap.data();
-    } else {
-      const usersCol = collection(db, "users");
-      const q = query(usersCol, where("lastActiveAt", "!=", null));
-      const activeUserSnapshot = await getDocs(q);
-      if (!activeUserSnapshot.empty) {
-        session = { userId: activeUserSnapshot.docs[0].id, timestamp: Date.now() };
-        await setDoc(doc(db, "sessions", session.userId), session);
-      }
-    }
-
-    if (!session) return null;
+    const userId = localStorage.getItem('cg_current_user_id');
+    if (!userId) return null;
     
     try {
-      if (session.userId === M_ID) return MASTER_USER_INSTANCE;
+      if (userId === M_ID) return MASTER_USER_INSTANCE;
       
-      const userDocRef = doc(db, "users", session.userId);
+      const userDocRef = doc(db, "users", userId);
       const userDocSnap = await getDoc(userDocRef);
-      if (!userDocSnap.exists()) return null;
+      if (!userDocSnap.exists()) {
+        localStorage.removeItem('cg_current_user_id');
+        return null;
+      }
 
       const user = { ...userDocSnap.data(), id: userDocSnap.id } as User;
       
@@ -293,11 +282,12 @@ export class AuthService {
       const lastPing = user.lastActiveAt ? new Date(user.lastActiveAt).getTime() : 0;
       if (now - lastPing > 60000) {
         user.lastActiveAt = new Date().toISOString();
-        await updateDoc(userDocRef, { lastActiveAt: user.lastActiveAt });
+        await updateDoc(userDocRef, { lastActiveAt: user.lastActiveAt }).catch(() => {});
       }
       
-      return user || null;
-    } catch {
+      return user;
+    } catch (error) {
+      console.error("Error fetching current user:", error);
       return null;
     }
   }
@@ -373,10 +363,10 @@ export class TaskService {
     if (isLocalAdmin) {
       const users = await AuthService.getUsers();
       const adminIds = users.map(u => u.id);
-      return allTasks.filter(t => adminIds.includes(t.owner_id));
+      return allTasks.filter(t => adminIds.includes(t.owner_id) || t.assignee_id === currentUser.id);
     }
 
-    return allTasks.filter(t => t.owner_id === currentUser.id);
+    return allTasks.filter(t => t.owner_id === currentUser.id || t.assignee_id === currentUser.id);
   }
 
   static async getAllTasksForAdmin(): Promise<Task[]> {
@@ -393,12 +383,12 @@ export class TaskService {
     if (isRootAdmin) return allTasks;
 
     if (isLocalAdmin) {
-      const users = await AuthService.getUsers(); // This returns only Admins when called by an Admin
+      const users = await AuthService.getUsers();
       const adminIds = users.map(u => u.id);
-      return allTasks.filter(t => adminIds.includes(t.owner_id));
+      return allTasks.filter(t => adminIds.includes(t.owner_id) || t.assignee_id === currentUser.id);
     }
 
-    return allTasks.filter(t => t.owner_id === currentUser.id);
+    return allTasks.filter(t => t.owner_id === currentUser.id || t.assignee_id === currentUser.id);
   }
 
   private static normalizeTask(task: Task): Task {
@@ -460,25 +450,28 @@ export class TaskService {
     if (!currentUser) return [];
 
     const tasksCol = collection(db, "tasks");
-    let q = query(tasksCol, where("project_id", "==", projectId));
+    const q = query(tasksCol, where("project_id", "==", projectId));
+    const querySnapshot = await getDocs(q);
+    const allTasks = querySnapshot.docs.map(doc => this.normalizeTask({ ...doc.data(), id: doc.id } as Task));
 
     const isRootAdmin = currentUser.id === M_ID;
     const isLocalAdmin = isAdminRole(currentUser.role);
 
-    if (!isRootAdmin) {
-      if (isLocalAdmin) {
-        const users = await AuthService.getUsers();
-        const adminIds = users.map(u => u.id);
-        const querySnapshot = await getDocs(q);
-        const tasks = querySnapshot.docs.map(doc => this.normalizeTask({ ...doc.data(), id: doc.id } as Task));
-        return tasks.filter(t => adminIds.includes(t.owner_id));
-      } else {
-        q = query(tasksCol, where("project_id", "==", projectId), where("owner_id", "==", currentUser.id));
-      }
+    if (isRootAdmin) return allTasks;
+
+    if (isLocalAdmin) {
+      const users = await AuthService.getUsers();
+      const adminIds = new Set(users.map(u => u.id));
+      // Admins see tasks owned by any admin OR assigned to themselves OR owned by themselves
+      return allTasks.filter(t =>
+        adminIds.has(t.owner_id) ||
+        t.assignee_id === currentUser.id ||
+        t.owner_id === currentUser.id
+      );
     }
 
-    const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => this.normalizeTask({ ...doc.data(), id: doc.id } as Task));
+    // Members see only their own tasks (owned or assigned)
+    return allTasks.filter(t => t.owner_id === currentUser.id || t.assignee_id === currentUser.id);
   }
 
   static async clearAllTasks(projectId: string): Promise<Task[]> {
@@ -783,10 +776,12 @@ export class CommitGuardService {
 
     if (isLocalAdmin) {
       const users = await AuthService.getUsers();
-      const adminIds = users.map(u => u.id);
-      return nodes.filter(n => n.assignedUserIds.some(uid => adminIds.includes(uid)));
+      const adminIds = new Set(users.map(u => u.id));
+      // Admins see nodes assigned to any admin OR assigned to themselves
+      return nodes.filter(n => n.assignedUserIds.some(uid => adminIds.has(uid) || uid === currentUser.id));
     }
 
+    // Members see nodes where they are explicitly assigned
     return nodes.filter(n => n.assignedUserIds.includes(currentUser.id));
   }
 
@@ -841,17 +836,12 @@ export class CommitGuardService {
     const allLocks: CommitLock[] = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as CommitLock));
 
     const isRootAdmin = currentUser.id === M_ID;
-    const isLocalAdmin = isAdminRole(currentUser.role);
-
     if (isRootAdmin) return allLocks;
 
-    if (isLocalAdmin) {
-      const users = await AuthService.getUsers();
-      const adminIds = users.map(u => u.id);
-      return allLocks.filter(l => adminIds.includes(l.userId));
-    }
-
-    return allLocks.filter(l => l.userId === currentUser.id);
+    // In CommitGuard, locks are visible to anyone who has access to the corresponding node
+    const myNodes = await this.getNodes();
+    const myNodeIds = myNodes.map(n => n.id);
+    return allLocks.filter(l => myNodeIds.includes(l.nodeId));
   }
 
   static async saveLocks(locks: CommitLock[]): Promise<void> {
@@ -987,12 +977,14 @@ export class CommitGuardService {
     if (isRootAdmin) return allAudits;
 
     if (isLocalAdmin) {
-      const users = await AuthService.getUsers();
-      const adminNames = users.map(u => u.name);
-      return allAudits.filter(a => adminNames.includes(a.userName));
+      // Local admins see all audits for better visibility
+      return allAudits;
     }
 
-    return allAudits.filter(a => a.userName === currentUser.name);
+    // Members see audits they performed OR audits on nodes they have access to
+    const myNodes = await this.getNodes();
+    const myNodeNames = myNodes.map(n => n.name);
+    return allAudits.filter(a => a.userName === currentUser.name || myNodeNames.includes(a.nodeName));
   }
 
   private static async addAudit(type: CommitAudit['type'], nodeName: string, subNodeName: string, userName: string): Promise<void> {
