@@ -46,8 +46,8 @@ interface AdminDashboardProps {
 }
 
 const AdminDashboard: React.FC<AdminDashboardProps> = ({ language }) => {
-  const [users, setUsers] = useState<User[]>(AuthService.getUsers());
-  const [allTasks] = useState<Task[]>(TaskService.getAllTasksForAdmin());
+  const [users, setUsers] = useState<User[]>([]);
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
   const [showProvisionModal, setShowProvisionModal] = useState(false);
@@ -72,8 +72,9 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ language }) => {
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error', message: string } | null>(null);
   const [systemUptime, setSystemUptime] = useState(99.98);
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [allActivities, setAllActivities] = useState<ActivityLog[]>([]);
   
-  const currentUser = useMemo(() => AuthService.getCurrentUser(), []);
   const t = translations[language].admin;
 
   const provDropdownRef = useRef<HTMLDivElement>(null);
@@ -104,18 +105,39 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ language }) => {
   }, [selectedUser, newRole, newPassword]);
 
   // Simulate real-time logs
-  const allActivities = useMemo(() => {
-    return users.flatMap(u => AuthService.getActivities(u.id))
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-      .slice(0, 15);
+  useEffect(() => {
+    const fetchActivities = async () => {
+      const activityPromises = users.map(u => AuthService.getActivities(u.id));
+      const activityResults = await Promise.all(activityPromises);
+      const flattened = activityResults.flat()
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .slice(0, 15);
+      setAllActivities(flattened);
+    };
+    if (users.length > 0) {
+      fetchActivities();
+    }
   }, [users]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
+    const init = async () => {
+      const user = await AuthService.getCurrentUser();
+      setCurrentUser(user);
+      const [u, t] = await Promise.all([
+        AuthService.getUsers(),
+        TaskService.getAllTasksForAdmin()
+      ]);
+      setUsers(u);
+      setAllTasks(t);
+    };
+    init();
+
+    const interval = setInterval(async () => {
       setSystemUptime(prev => Math.min(100, Math.max(99.9, prev + (Math.random() * 0.02 - 0.01))));
       setCurrentTime(Date.now());
       // Refresh user list periodically to update online flags
-      setUsers(AuthService.getUsers());
+      const freshUsers = await AuthService.getUsers();
+      setUsers(freshUsers);
     }, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -155,8 +177,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ language }) => {
     await new Promise(resolve => setTimeout(resolve, 1500));
 
     try {
-      AuthService.adminDeleteUser(currentUser.id, userToDelete.id);
-      const freshUsers = AuthService.getUsers();
+      await AuthService.adminDeleteUser(currentUser.id, userToDelete.id);
+      const freshUsers = await AuthService.getUsers();
       setUsers(freshUsers);
       setFeedback({ type: 'success', message: `IDENTITY_PURGED: ${userToDelete.name.toUpperCase()}` });
       setUserToDelete(null);
@@ -179,10 +201,11 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ language }) => {
     try {
       const newUser = await AuthService.register(provName, provUsername, provPassword);
       if (provRole !== 'Member') {
-        AuthService.adminUpdateUser(currentUser.id, newUser.id, { role: provRole });
+        await AuthService.adminUpdateUser(currentUser.id, newUser.id, { role: provRole });
       }
       
-      setUsers(AuthService.getUsers());
+      const freshUsers = await AuthService.getUsers();
+      setUsers(freshUsers);
       setFeedback({ type: 'success', message: 'Identity Provisioned Successfully' });
       
       setTimeout(() => {
@@ -201,15 +224,16 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ language }) => {
     }
   };
 
-  const handleUpdateUser = () => {
+  const handleUpdateUser = async () => {
     if (!currentUser || !selectedUser || !canDeploy) return;
     setIsUpdating(true);
     try {
       const updates: Partial<User> = { role: newRole };
       if (newPassword.trim()) updates.password = newPassword.trim();
       
-      AuthService.adminUpdateUser(currentUser.id, selectedUser.id, updates);
-      setUsers(AuthService.getUsers());
+      await AuthService.adminUpdateUser(currentUser.id, selectedUser.id, updates);
+      const freshUsers = await AuthService.getUsers();
+      setUsers(freshUsers);
       setFeedback({ type: 'success', message: t.update_success });
       setTimeout(() => {
         setSelectedUser(null);

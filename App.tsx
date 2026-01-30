@@ -803,9 +803,9 @@ const App: React.FC = () => {
                 <ProfileView 
                   user={currentUser} 
                   language={language} 
-                  onUpdate={(updated) => {
+                  onUpdate={async (updated) => {
                     setCurrentUser(updated);
-                    setUsers(AuthService.getUsers());
+                    setUsers(await AuthService.getUsers());
                   }} 
                   theme={theme}
                   onToggleTheme={toggleTheme}
