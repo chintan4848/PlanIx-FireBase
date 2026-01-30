@@ -34,21 +34,26 @@ const CommitGuardView: React.FC<CommitGuardViewProps> = ({ user, onExit, onLogou
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   
-  const [nodes, setNodes] = useState<CommitNode[]>(CommitGuardService.getNodes());
-  const [locks, setLocks] = useState<CommitLock[]>(CommitGuardService.getLocks());
-  const [audit, setAudit] = useState<CommitAudit[]>(CommitGuardService.getAuditArchive());
+  const [nodes, setNodes] = useState<CommitNode[]>([]);
+  const [locks, setLocks] = useState<CommitLock[]>([]);
+  const [audit, setAudit] = useState<CommitAudit[]>([]);
   
   const [searchQuery, setSearchQuery] = useState('');
   const [isMatrixOpen, setIsMatrixOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refreshLiveStats = useCallback(() => {
-    setLocks(CommitGuardService.getLocks());
-    setAudit(CommitGuardService.getAuditArchive());
+  const refreshLiveStats = useCallback(async () => {
+    const [l, a] = await Promise.all([
+      CommitGuardService.getLocks(),
+      CommitGuardService.getAuditArchive()
+    ]);
+    setLocks(l);
+    setAudit(a);
   }, []);
 
-  const refreshNodes = useCallback(() => {
-    setNodes(CommitGuardService.getNodes());
+  const refreshNodes = useCallback(async () => {
+    const n = await CommitGuardService.getNodes();
+    setNodes(n);
   }, []);
 
   useEffect(() => {
@@ -63,6 +68,11 @@ const CommitGuardView: React.FC<CommitGuardViewProps> = ({ user, onExit, onLogou
   }, [refreshLiveStats, refreshNodes]);
 
   useEffect(() => {
+    const init = async () => {
+      await Promise.all([refreshLiveStats(), refreshNodes()]);
+    };
+    init();
+
     const intervalStats = setInterval(refreshLiveStats, 2000);
     const intervalNodes = setInterval(refreshNodes, 5000);
     return () => {
@@ -71,7 +81,13 @@ const CommitGuardView: React.FC<CommitGuardViewProps> = ({ user, onExit, onLogou
     };
   }, [refreshLiveStats, refreshNodes]);
 
-  const allUsers = useMemo(() => AuthService.getUsers(), []);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
+  useEffect(() => {
+    const fetchUsers = async () => {
+      setAllUsers(await AuthService.getUsers());
+    };
+    fetchUsers();
+  }, []);
   const isAdmin = user.role === 'Admin' || user.role === 'Project Leader' || user.role === 'Team Lead';
 
   // Reverted: Everyone can see all nodes in the registry
@@ -113,27 +129,26 @@ const CommitGuardView: React.FC<CommitGuardViewProps> = ({ user, onExit, onLogou
     return { syncsToday, activeDevs, lockedNodes, riskLevel, heatmap, topSyncers, projectLockCount };
   }, [audit, locks, allUsers]);
 
-  const handleAction = (subNodeId: string, type: 'engage' | 'abort' | 'finalize') => {
+  const handleAction = async (subNodeId: string, type: 'engage' | 'abort' | 'finalize') => {
     if (!selectedProjectId) return;
     setError(null);
     try {
-      if (type === 'engage') CommitGuardService.engageNode(selectedProjectId, subNodeId, user);
-      else if (type === 'abort') CommitGuardService.abortSync(subNodeId, user);
-      else if (type === 'finalize') CommitGuardService.finalizeSync(subNodeId, user);
-      refreshLiveStats();
+      if (type === 'engage') await CommitGuardService.engageNode(selectedProjectId, subNodeId, user);
+      else if (type === 'abort') await CommitGuardService.abortSync(subNodeId, user);
+      else if (type === 'finalize') await CommitGuardService.finalizeSync(subNodeId, user);
+      await refreshLiveStats();
     } catch (err: any) {
       setError(err.message);
       setTimeout(() => setError(null), 4000);
     }
   };
 
-  const handleResetRelease = (nodeId: string) => {
-    CommitGuardService.resetProjectLocks(nodeId, user);
-    refreshLiveStats();
-    refreshNodes();
+  const handleResetRelease = async (nodeId: string) => {
+    await CommitGuardService.resetProjectLocks(nodeId, user);
+    await Promise.all([refreshLiveStats(), refreshNodes()]);
   };
 
-  const handleToggleDone = (nodeId: string) => {
+  const handleToggleDone = async (nodeId: string) => {
     const project = nodes.find(n => n.id === nodeId);
     const isCurrentlyDone = project?.doneUserIds?.includes(user.id);
     
@@ -142,13 +157,13 @@ const CommitGuardView: React.FC<CommitGuardViewProps> = ({ user, onExit, onLogou
       // Find active lock for this user in this project
       const userLock = locks.find(l => l.nodeId === nodeId && l.userId === user.id);
       if (userLock) {
-        CommitGuardService.finalizeSync(userLock.subNodeId, user);
-        refreshLiveStats();
+        await CommitGuardService.finalizeSync(userLock.subNodeId, user);
+        await refreshLiveStats();
       }
     }
     
-    CommitGuardService.toggleUserDone(nodeId, user.id);
-    refreshNodes();
+    await CommitGuardService.toggleUserDone(nodeId, user.id);
+    await refreshNodes();
   };
 
   const currentProject = nodes.find(n => n.id === selectedProjectId) || null;

@@ -328,8 +328,16 @@ const CommitGuardProjects: React.FC<ProjectsProps> = ({ nodes, currentUser, lock
   const [deletingNode, setDeletingNode] = useState<CommitNode | null>(null);
   const [isPurging, setIsPurging] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [allUsers, setAllUsers] = useState<User[]>([]);
   
-  const allUsers = useMemo(() => AuthService.getUsers(), []);
+  useEffect(() => {
+    const fetchUsers = async () => {
+      const u = await AuthService.getUsers();
+      setAllUsers(u);
+    };
+    fetchUsers();
+  }, []);
+
   const isAdmin = currentUser.role === 'Admin' || currentUser.role === 'Project Leader' || currentUser.role === 'Team Lead';
 
   const isModalOpen = !!editingNode || !!deletingNode;
@@ -343,12 +351,12 @@ const CommitGuardProjects: React.FC<ProjectsProps> = ({ nodes, currentUser, lock
     return result;
   }, [nodes, searchQuery]);
 
-  const handleSaveNode = (node: CommitNode) => {
+  const handleSaveNode = async (node: CommitNode) => {
     if (!isAdmin) return;
     if (nodes.find(n => n.id === node.id)) {
-      CommitGuardService.updateNode(node.id, node);
+      await CommitGuardService.updateNode(node.id, node);
     } else {
-      CommitGuardService.addNode(node);
+      await CommitGuardService.addNode(node);
     }
     setEditingNode(null);
     onRefresh();
@@ -358,7 +366,7 @@ const CommitGuardProjects: React.FC<ProjectsProps> = ({ nodes, currentUser, lock
     if (!isAdmin || !deletingNode) return;
     setIsPurging(true);
     await new Promise(resolve => setTimeout(resolve, 800));
-    CommitGuardService.deleteNode(deletingNode.id);
+    await CommitGuardService.deleteNode(deletingNode.id);
     setDeletingNode(null);
     setIsPurging(false);
     onRefresh();

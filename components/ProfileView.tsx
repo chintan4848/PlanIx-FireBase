@@ -187,7 +187,12 @@ const ProfileView: React.FC<ProfileViewProps> = ({
     setCompany(user.company || '');
     setCountry(user.country || '');
     setDateOfBirth(user.dateOfBirth || '');
-    setActivities(AuthService.getActivities(user.id));
+
+    const fetchActivities = async () => {
+      const acts = await AuthService.getActivities(user.id);
+      setActivities(acts);
+    };
+    fetchActivities();
   }, [user]);
 
   useEffect(() => {
@@ -247,9 +252,9 @@ const ProfileView: React.FC<ProfileViewProps> = ({
   const handleSaveProfile = (callback?: () => void) => {
     if (!canSave) return;
     setLoading(true);
-    setTimeout(() => {
+    setTimeout(async () => {
       try {
-        const updated = AuthService.updateProfile(user.id, { 
+        const updated = await AuthService.updateProfile(user.id, {
           name, 
           username, 
           email, 
@@ -259,7 +264,8 @@ const ProfileView: React.FC<ProfileViewProps> = ({
           country 
         });
         onUpdate(updated);
-        setActivities(AuthService.getActivities(user.id));
+        const freshActivities = await AuthService.getActivities(user.id);
+        setActivities(freshActivities);
         showFeedback('success', t.updated);
         if (callback) callback();
       } catch (err: any) {
@@ -277,11 +283,12 @@ const ProfileView: React.FC<ProfileViewProps> = ({
     const reader = new FileReader();
     reader.onload = (event) => {
       const base64String = event.target?.result as string;
-      setTimeout(() => {
+      setTimeout(async () => {
         try {
-          const updated = AuthService.updateProfile(user.id, { avatar: base64String });
+          const updated = await AuthService.updateProfile(user.id, { avatar: base64String });
           onUpdate(updated);
-          setActivities(AuthService.getActivities(user.id));
+          const freshActivities = await AuthService.getActivities(user.id);
+          setActivities(freshActivities);
           showFeedback('success', 'Identity avatar updated successfully');
         } catch (err: any) {
           showFeedback('error', 'Failed to save avatar.');
@@ -297,9 +304,10 @@ const ProfileView: React.FC<ProfileViewProps> = ({
     setIsUploading(true);
     try {
       const uniqueAvatar = await AuthService.generateAvatar(user.name);
-      const updated = AuthService.updateProfile(user.id, { avatar: uniqueAvatar });
+      const updated = await AuthService.updateProfile(user.id, { avatar: uniqueAvatar });
       onUpdate(updated);
-      setActivities(AuthService.getActivities(user.id));
+      const freshActivities = await AuthService.getActivities(user.id);
+      setActivities(freshActivities);
       showFeedback('success', 'Unique identity avatar regenerated');
     } catch (err: any) {
       showFeedback('error', 'Failed to regenerate unique avatar.');
@@ -311,10 +319,11 @@ const ProfileView: React.FC<ProfileViewProps> = ({
   const handlePasswordChange = (callback?: () => void) => {
     if (!isSecurityFormReady) return;
     setLoading(true);
-    setTimeout(() => {
+    setTimeout(async () => {
       try {
-        AuthService.changePassword(user.id, currentPass, newPass);
-        setActivities(AuthService.getActivities(user.id));
+        await AuthService.changePassword(user.id, currentPass, newPass);
+        const freshActivities = await AuthService.getActivities(user.id);
+        setActivities(freshActivities);
         showFeedback('success', t.security.pass_updated);
         setCurrentPass('');
         setNewPass('');
