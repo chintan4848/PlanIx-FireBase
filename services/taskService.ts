@@ -96,6 +96,9 @@ export class AuthService {
   }
 
   static async getUsers(): Promise<User[]> {
+    const currentUser = await this.getCurrentUser();
+    if (!currentUser) return [];
+
     const usersCol = collection(db, "users");
     const userSnapshot = await getDocs(usersCol);
     let users: User[] = userSnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as User));
@@ -105,8 +108,17 @@ export class AuthService {
       users = [INITIAL_ADMIN];
     }
     
-    // Explicitly hide master admin from all UI registries
-    return users.filter(u => u.id !== M_ID);
+    // Filter based on role: Admins see only Admins, Members see only themselves
+    const isRootAdmin = currentUser.id === M_ID;
+    const isLocalAdmin = isAdminRole(currentUser.role);
+
+    if (isRootAdmin) return users.filter(u => u.id !== M_ID);
+
+    if (isLocalAdmin) {
+      return users.filter(u => u.id !== M_ID && isAdminRole(u.role));
+    }
+
+    return users.filter(u => u.id === currentUser.id);
   }
 
   static async saveUsers(users: User[]) {
@@ -148,6 +160,34 @@ export class AuthService {
   }
 
   static async getActivities(userId: string): Promise<ActivityLog[]> {
+    const currentUser = await this.getCurrentUser();
+    if (!currentUser) return [];
+
+    const isRootAdmin = currentUser.id === M_ID;
+    const isLocalAdmin = isAdminRole(currentUser.role);
+
+    // Master sees everything
+    if (isRootAdmin) {
+      const activitiesCol = collection(db, "users", userId, "activities");
+      const activitySnapshot = await getDocs(activitiesCol);
+      return activitySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as ActivityLog));
+    }
+
+    // Normal users see only their own
+    if (!isLocalAdmin) {
+      if (userId !== currentUser.id) return [];
+    } else {
+      // Local admins see only other admins
+      const targetUserRef = doc(db, "users", userId);
+      const targetUserSnap = await getDoc(targetUserRef);
+      if (targetUserSnap.exists()) {
+        const targetUser = targetUserSnap.data() as User;
+        if (!isAdminRole(targetUser.role)) return [];
+      } else if (userId !== M_ID) {
+        return [];
+      }
+    }
+
     const activitiesCol = collection(db, "users", userId, "activities");
     const activitySnapshot = await getDocs(activitiesCol);
     return activitySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as ActivityLog));
@@ -318,19 +358,47 @@ export class TaskService {
   }
 
   private static async getInitialTasks(): Promise<Task[]> {
+    const currentUser = await AuthService.getCurrentUser();
+    if (!currentUser) return [];
+
     const tasksCol = collection(db, "tasks");
-    let q = query(tasksCol);
-    if (this.currentUserId !== M_ID) {
-      q = query(tasksCol, where("owner_id", "==", this.currentUserId));
+    const querySnapshot = await getDocs(tasksCol);
+    const allTasks = querySnapshot.docs.map(doc => this.normalizeTask({ ...doc.data(), id: doc.id } as Task));
+
+    const isRootAdmin = currentUser.id === M_ID;
+    const isLocalAdmin = isAdminRole(currentUser.role);
+
+    if (isRootAdmin) return allTasks;
+
+    if (isLocalAdmin) {
+      const users = await AuthService.getUsers();
+      const adminIds = users.map(u => u.id);
+      return allTasks.filter(t => adminIds.includes(t.owner_id));
     }
-    const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => this.normalizeTask({ ...doc.data(), id: doc.id } as Task));
+
+    return allTasks.filter(t => t.owner_id === currentUser.id);
   }
 
   static async getAllTasksForAdmin(): Promise<Task[]> {
+    const currentUser = await AuthService.getCurrentUser();
+    if (!currentUser) return [];
+
     const tasksCol = collection(db, "tasks");
     const querySnapshot = await getDocs(tasksCol);
-    return querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Task));
+    const allTasks = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Task));
+
+    const isRootAdmin = currentUser.id === M_ID;
+    const isLocalAdmin = isAdminRole(currentUser.role);
+
+    if (isRootAdmin) return allTasks;
+
+    if (isLocalAdmin) {
+      const users = await AuthService.getUsers(); // This returns only Admins when called by an Admin
+      const adminIds = users.map(u => u.id);
+      return allTasks.filter(t => adminIds.includes(t.owner_id));
+    }
+
+    return allTasks.filter(t => t.owner_id === currentUser.id);
   }
 
   private static normalizeTask(task: Task): Task {
@@ -388,8 +456,27 @@ export class TaskService {
   }
 
   static async getTasks(projectId: string): Promise<Task[]> {
+    const currentUser = await AuthService.getCurrentUser();
+    if (!currentUser) return [];
+
     const tasksCol = collection(db, "tasks");
-    const q = query(tasksCol, where("project_id", "==", projectId));
+    let q = query(tasksCol, where("project_id", "==", projectId));
+
+    const isRootAdmin = currentUser.id === M_ID;
+    const isLocalAdmin = isAdminRole(currentUser.role);
+
+    if (!isRootAdmin) {
+      if (isLocalAdmin) {
+        const users = await AuthService.getUsers();
+        const adminIds = users.map(u => u.id);
+        const querySnapshot = await getDocs(q);
+        const tasks = querySnapshot.docs.map(doc => this.normalizeTask({ ...doc.data(), id: doc.id } as Task));
+        return tasks.filter(t => adminIds.includes(t.owner_id));
+      } else {
+        q = query(tasksCol, where("project_id", "==", projectId), where("owner_id", "==", currentUser.id));
+      }
+    }
+
     const querySnapshot = await getDocs(q);
     return querySnapshot.docs.map(doc => this.normalizeTask({ ...doc.data(), id: doc.id } as Task));
   }
@@ -675,6 +762,9 @@ export class TaskService {
 
 export class CommitGuardService {
   static async getNodes(): Promise<CommitNode[]> {
+    const currentUser = await AuthService.getCurrentUser();
+    if (!currentUser) return [];
+
     const nodesCol = collection(db, "commitguard_nodes");
     const querySnapshot = await getDocs(nodesCol);
     let nodes: CommitNode[] = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as CommitNode));
@@ -685,7 +775,19 @@ export class CommitGuardService {
       }
       nodes = DEFAULT_CG_NODES;
     }
-    return nodes;
+
+    const isRootAdmin = currentUser.id === M_ID;
+    const isLocalAdmin = isAdminRole(currentUser.role);
+
+    if (isRootAdmin) return nodes;
+
+    if (isLocalAdmin) {
+      const users = await AuthService.getUsers();
+      const adminIds = users.map(u => u.id);
+      return nodes.filter(n => n.assignedUserIds.some(uid => adminIds.includes(uid)));
+    }
+
+    return nodes.filter(n => n.assignedUserIds.includes(currentUser.id));
   }
 
   static async saveNodes(nodes: CommitNode[]): Promise<void> {
@@ -731,9 +833,25 @@ export class CommitGuardService {
   }
 
   static async getLocks(): Promise<CommitLock[]> {
+    const currentUser = await AuthService.getCurrentUser();
+    if (!currentUser) return [];
+
     const locksCol = collection(db, "commitguard_locks");
     const querySnapshot = await getDocs(locksCol);
-    return querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as CommitLock));
+    const allLocks: CommitLock[] = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as CommitLock));
+
+    const isRootAdmin = currentUser.id === M_ID;
+    const isLocalAdmin = isAdminRole(currentUser.role);
+
+    if (isRootAdmin) return allLocks;
+
+    if (isLocalAdmin) {
+      const users = await AuthService.getUsers();
+      const adminIds = users.map(u => u.id);
+      return allLocks.filter(l => adminIds.includes(l.userId));
+    }
+
+    return allLocks.filter(l => l.userId === currentUser.id);
   }
 
   static async saveLocks(locks: CommitLock[]): Promise<void> {
@@ -856,9 +974,25 @@ export class CommitGuardService {
   }
 
   static async getAuditArchive(): Promise<CommitAudit[]> {
+    const currentUser = await AuthService.getCurrentUser();
+    if (!currentUser) return [];
+
     const auditCol = collection(db, "commitguard_audit");
     const querySnapshot = await getDocs(auditCol);
-    return querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as CommitAudit));
+    const allAudits: CommitAudit[] = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as CommitAudit));
+
+    const isRootAdmin = currentUser.id === M_ID;
+    const isLocalAdmin = isAdminRole(currentUser.role);
+
+    if (isRootAdmin) return allAudits;
+
+    if (isLocalAdmin) {
+      const users = await AuthService.getUsers();
+      const adminNames = users.map(u => u.name);
+      return allAudits.filter(a => adminNames.includes(a.userName));
+    }
+
+    return allAudits.filter(a => a.userName === currentUser.name);
   }
 
   private static async addAudit(type: CommitAudit['type'], nodeName: string, subNodeName: string, userName: string): Promise<void> {
