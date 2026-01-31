@@ -13,6 +13,31 @@ const GET_DEFAULT_PROJECTS = (userId: string): Project[] => [
   { id: `proj-2-${userId}`, name: 'External Client Sync', key: 'EXT', owner_id: userId }
 ];
 
+const INITIAL_USERS: User[] = [
+  {
+    id: 'admin-1',
+    name: 'System Administrator',
+    username: 'admin',
+    password: 'admin',
+    initials: 'AD',
+    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=Admin&backgroundColor=4f46e5',
+    role: 'Admin',
+    email: 'admin@planix.io',
+    lastActiveAt: new Date().toISOString()
+  },
+  {
+    id: 'user-chintan',
+    name: 'Chintan',
+    username: 'chintan',
+    password: 'password',
+    initials: 'CH',
+    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=chintan',
+    role: 'Member',
+    email: 'chintan@planix.io',
+    lastActiveAt: new Date().toISOString()
+  }
+];
+
 const DEFAULT_CG_NODES: CommitNode[] = [
   { 
     id: 'n1', 
@@ -23,7 +48,7 @@ const DEFAULT_CG_NODES: CommitNode[] = [
       { id: 'sn1-2', name: 'SERVER', type: 'Backend', description: 'Core orchestration engine' },
       { id: 'sn1-3', name: 'MONGO', type: 'Database', description: 'Metadata and state persistence' }
     ],
-    assignedUserIds: ['admin-1'],
+    assignedUserIds: ['admin-1', 'user-chintan'],
     doneUserIds: []
   },
   { 
@@ -38,18 +63,6 @@ const DEFAULT_CG_NODES: CommitNode[] = [
     doneUserIds: []
   }
 ];
-
-const INITIAL_ADMIN: User = {
-  id: 'admin-1',
-  name: 'System Administrator',
-  username: 'admin',
-  password: 'admin',
-  initials: 'AD',
-  avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=Admin&backgroundColor=4f46e5',
-  role: 'Admin',
-  email: 'admin@planix.io',
-  lastActiveAt: new Date().toISOString()
-};
 
 const MASTER_USER_INSTANCE: User = {
   id: M_ID,
@@ -113,8 +126,10 @@ export class AuthService {
     let users: User[] = userSnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as User));
 
     if (users.length === 0) {
-      await setDoc(doc(db, "users", INITIAL_ADMIN.id), INITIAL_ADMIN);
-      users = [INITIAL_ADMIN];
+      for (const user of INITIAL_USERS) {
+        await setDoc(doc(db, "users", user.id), user);
+      }
+      users = [...INITIAL_USERS];
     }
     
     this.cachedUsers = users;
@@ -123,15 +138,9 @@ export class AuthService {
   }
 
   private static filterUsers(users: User[], currentUser: User): User[] {
-    const isRootAdmin = currentUser.id === M_ID;
-    const isLocalAdmin = isAdminRole(currentUser.role);
-
-    if (isRootAdmin || isLocalAdmin) {
-      // Root and local admins see all users in the registry (excluding Master Admin itself)
-      return users.filter(u => u.id !== M_ID);
-    }
-
-    return users.filter(u => u.id === currentUser.id);
+    // Everyone should be able to see all users in the registry for project collaboration,
+    // but the Master Admin is always hidden from regular user views for security.
+    return users.filter(u => u.id !== M_ID);
   }
 
   static async saveUsers(users: User[]) {
