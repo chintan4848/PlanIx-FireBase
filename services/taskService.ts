@@ -281,7 +281,19 @@ export class AuthService {
 
     const usersCol = collection(db, "users");
     const q = query(usersCol, where("username", "==", username), where("password", "==", password));
-    const querySnapshot = await getDocs(q);
+    let querySnapshot = await getDocs(q);
+
+    if (querySnapshot.empty) {
+      // Auto-provision if database is purged
+      const checkSnapshot = await getDocs(query(usersCol, limit(1)));
+      if (checkSnapshot.empty) {
+        for (const user of INITIAL_USERS) {
+          await setDoc(doc(db, "users", user.id), user);
+        }
+        // Retry login query after provisioning
+        querySnapshot = await getDocs(q);
+      }
+    }
 
     if (querySnapshot.empty) throw new Error("Invalid credentials.");
     
@@ -413,12 +425,6 @@ export class AuthService {
 }
 
 export class TaskService {
-  private static currentUserId: string = '';
-
-  static setContext(userId: string) {
-    this.currentUserId = userId;
-  }
-
   private static async getInitialTasks(): Promise<Task[]> {
     const currentUser = await AuthService.getCurrentUser();
     if (!currentUser) return [];
@@ -462,8 +468,11 @@ export class TaskService {
   }
 
   private static async saveTasks(newTasks: Task[]): Promise<void> {
+    const currentUser = await AuthService.getCurrentUser();
+    if (!currentUser) return;
+
     const batch = writeBatch(db);
-    if (this.currentUserId === M_ID) {
+    if (currentUser.id === M_ID) {
       for (const task of newTasks) {
         batch.set(doc(db, "tasks", task.id), task);
       }
@@ -481,17 +490,20 @@ export class TaskService {
   }
 
   static async getProjects(): Promise<Project[]> {
+    const currentUser = await AuthService.getCurrentUser();
+    if (!currentUser) return [];
+
     const projectsCol = collection(db, "projects");
     const projectSnapshot = await getDocs(projectsCol);
     let allProjects: Project[] = projectSnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Project));
     
     // Master Admin bypass: sees all projects
-    if (this.currentUserId === M_ID) return allProjects;
+    if (currentUser.id === M_ID) return allProjects;
 
-    const userProjects = allProjects.filter(p => p.owner_id === this.currentUserId);
+    const userProjects = allProjects.filter(p => p.owner_id === currentUser.id);
     if (userProjects.length > 0) return userProjects;
     
-    const defaults = GET_DEFAULT_PROJECTS(this.currentUserId);
+    const defaults = GET_DEFAULT_PROJECTS(currentUser.id);
     for (const project of defaults) {
       await setDoc(doc(db, "projects", project.id), project);
     }
@@ -499,6 +511,9 @@ export class TaskService {
   }
 
   static async updateProjectName(projectId: string, newName: string): Promise<Project[]> {
+    const currentUser = await AuthService.getCurrentUser();
+    if (!currentUser) return [];
+
     const projectRef = doc(db, "projects", projectId);
     await updateDoc(projectRef, { name: newName });
     
@@ -506,7 +521,7 @@ export class TaskService {
     const querySnapshot = await getDocs(projectsCol);
     const updatedProjects: Project[] = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Project));
 
-    return this.currentUserId === M_ID ? updatedProjects : updatedProjects.filter(p => p.owner_id === this.currentUserId);
+    return currentUser.id === M_ID ? updatedProjects : updatedProjects.filter(p => p.owner_id === currentUser.id);
   }
 
   static async getTasks(projectId: string): Promise<Task[]> {
@@ -529,8 +544,11 @@ export class TaskService {
   }
 
   static async clearAllTasks(projectId: string): Promise<Task[]> {
+    const currentUser = await AuthService.getCurrentUser();
+    if (!currentUser) return [];
+
     const tasksCol = collection(db, "tasks");
-    const q = query(tasksCol, where("project_id", "==", projectId), where("owner_id", "==", this.currentUserId));
+    const q = query(tasksCol, where("project_id", "==", projectId), where("owner_id", "==", currentUser.id));
     const querySnapshot = await getDocs(q);
 
     const batch = writeBatch(db);
@@ -542,6 +560,9 @@ export class TaskService {
   }
 
   static async createTasks(externalIds: number[], projectId: string, assigneeId: string | null): Promise<Task[]> {
+    const currentUser = await AuthService.getCurrentUser();
+    if (!currentUser) return [];
+
     const userTasks = await this.getTasks(projectId);
     const uniqueInputIds = Array.from(new Set(externalIds));
     const now = new Date().toISOString();
@@ -568,7 +589,7 @@ export class TaskService {
       } else {
         newTasksToCreate.push(this.normalizeTask({
           id: Math.random().toString(36).substr(2, 9),
-          owner_id: this.currentUserId,
+          owner_id: currentUser.id,
           external_id: id,
           external_url: '', 
           title: `Redmine Task #${id}`,
@@ -791,9 +812,12 @@ export class TaskService {
   }
 
   static async importFullState(data: any): Promise<void> {
+    const currentUser = await AuthService.getCurrentUser();
+    if (!currentUser) return;
+
     if (!data || typeof data !== 'object') throw new Error("Invalid format.");
     const tasks = data.tasks || (Array.isArray(data) ? data : []);
-    const userTasksWithCorrectOwner = tasks.map((t: any) => ({ ...t, owner_id: this.currentUserId }));
+    const userTasksWithCorrectOwner = tasks.map((t: any) => ({ ...t, owner_id: currentUser.id }));
     const projects = data.projects || [];
 
     const batch = writeBatch(db);

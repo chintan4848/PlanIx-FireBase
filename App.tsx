@@ -62,7 +62,6 @@ const App: React.FC = () => {
       if (user) {
         const fetchedUsers = await AuthService.getUsers();
         setUsers(fetchedUsers);
-        TaskService.setContext(user.id);
         loadAll();
       }
     };
@@ -124,7 +123,6 @@ const App: React.FC = () => {
   const handleLogin = async (user: User) => {
     setCurrentUser(user);
     setUsers(await AuthService.getUsers());
-    TaskService.setContext(user.id);
     loadAll();
     
     const tourKey = `atms_tour_seen_${user.id}`;
@@ -166,7 +164,6 @@ const App: React.FC = () => {
 
   const loadAll = useCallback(async () => {
     if (!currentUser) return;
-    TaskService.setContext(currentUser.id);
     const projs = await TaskService.getProjects();
     setProjects(projs);
     if (!activeProjectId && projs.length > 0) {
@@ -176,7 +173,6 @@ const App: React.FC = () => {
 
   const loadTasks = useCallback(async () => {
     if (activeProjectId && currentUser) {
-      TaskService.setContext(currentUser.id);
       const projectTasks = await TaskService.getTasks(activeProjectId);
       setTasks([...projectTasks]);
     }
