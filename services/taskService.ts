@@ -620,7 +620,8 @@ export class TaskService {
   static async markAsViewed(taskId: string): Promise<Task[]> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists() || !(taskDoc.data() as Task).is_new) return await this.getTasks((taskDoc.data() as Task)?.project_id || '');
+    if (!taskDoc.exists()) return [];
+    if (!(taskDoc.data() as Task).is_new) return await this.getTasks((taskDoc.data() as Task).project_id);
 
     await updateDoc(taskRef, { is_new: false });
     const updatedTask = { ...taskDoc.data(), id: taskDoc.id, is_new: false } as Task;
@@ -631,7 +632,7 @@ export class TaskService {
   static async deleteTask(taskId: string): Promise<Task[]> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists()) return await this.getTasks('');
+    if (!taskDoc.exists()) return [];
 
     const projectId = (taskDoc.data() as Task).project_id;
     await deleteDoc(taskRef);
@@ -641,7 +642,7 @@ export class TaskService {
   static async updateTask(taskId: string, updates: Partial<Task>): Promise<Task[]> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists()) return await this.getTasks('');
+    if (!taskDoc.exists()) return [];
 
     const targetTask = { ...taskDoc.data(), id: taskDoc.id } as Task;
     const projectId = targetTask.project_id;
@@ -678,7 +679,7 @@ export class TaskService {
   static async reorderTask(taskId: string, targetStatus: TaskStatus, targetIndex: number): Promise<Task[]> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists()) return await this.getTasks('');
+    if (!taskDoc.exists()) return [];
 
     const task = { ...taskDoc.data(), id: taskDoc.id } as Task;
     const projectId = task.project_id;
@@ -714,21 +715,25 @@ export class TaskService {
   }
 
   static async updateTaskStatus(taskId: string, newStatus: TaskStatus): Promise<Task[]> {
-    // Reorder task will handle the update and return the updated task list.
-    // Since reorderTask already fetches the relevant tasks from Firestore and updates them,
-    // we just need to call it and return its result.
-    const tasks = await this.getTasks(''); // Fetch all tasks to find the project_id
-    const targetTask = tasks.find(t => t.id === taskId);
-    if (!targetTask) return tasks; // Return original tasks if target not found
+    const taskRef = doc(db, "tasks", taskId);
+    const taskDoc = await getDoc(taskRef);
+    if (!taskDoc.exists()) return [];
 
-    const projectTasks = tasks.filter(t => t.project_id === targetTask.project_id && t.status === newStatus);
-    return await this.reorderTask(taskId, newStatus, projectTasks.length);
+    const targetTask = { ...taskDoc.data(), id: taskDoc.id } as Task;
+    const projectId = targetTask.project_id;
+
+    // To find the target index (append to end), we need tasks for this project and status
+    const tasksCol = collection(db, "tasks");
+    const q = query(tasksCol, where("project_id", "==", projectId), where("status", "==", newStatus));
+    const querySnapshot = await getDocs(q);
+
+    return await this.reorderTask(taskId, newStatus, querySnapshot.size);
   }
 
   static async pauseTimer(taskId: string): Promise<Task[]> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists()) return await this.getTasks('');
+    if (!taskDoc.exists()) return [];
 
     const task = { ...taskDoc.data(), id: taskDoc.id } as Task;
 
@@ -747,7 +752,7 @@ export class TaskService {
   static async resumeTimer(taskId: string): Promise<Task[]> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists()) return await this.getTasks('');
+    if (!taskDoc.exists()) return [];
 
     const task = { ...taskDoc.data(), id: taskDoc.id } as Task;
 
