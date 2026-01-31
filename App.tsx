@@ -68,33 +68,6 @@ const App: React.FC = () => {
     };
     initializeUser();
   }, []);
-
-  // Temporary: Register Admin User on initial load for testing
-  useEffect(() => {
-    const registerTempAdmin = async () => {
-      const name = "Temporary Admin";
-      const username = `admin_${Math.random().toString(36).substring(2, 8)}`;
-      const password = `pass_${Math.random().toString(36).substring(2, 8)}`;
-
-      try {
-        // Check if an admin user already exists to prevent duplicate registrations on refresh
-        const existingUsers = await AuthService.getUsers();
-        if (!existingUsers.some(u => u.role === 'Admin')) {
-          const adminUser = await AuthService.register(name, username, password);
-          console.log("--- Admin User Credentials (Temporary) ---");
-          console.log(`Name: ${adminUser.name}`);
-          console.log(`Username: ${adminUser.username}`);
-          console.log(`Password: ${password}`); // Log the clear-text password
-          console.log(`ID: ${adminUser.id}`);
-          console.log(`Role: ${adminUser.role}`);
-          console.log("-----------------------------------------");
-        }
-      } catch (error) {
-        console.error("Error registering temporary admin user:", error);
-      }
-    };
-    registerTempAdmin();
-  }, []); // Run only once on component mount
   
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
