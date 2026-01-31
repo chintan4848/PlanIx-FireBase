@@ -307,6 +307,9 @@ const App: React.FC = () => {
   };
 
   const handleStatusChange = async (taskId: string, newStatus: TaskStatus) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || (currentUser && task.owner_id !== currentUser.id)) return;
+
     const now = new Date().toISOString();
     // Optimistic Update
     setTasks(prevTasks => prevTasks.map(t => {
@@ -335,7 +338,7 @@ const App: React.FC = () => {
 
     // Background Update
     try {
-      const updatedTask = await TaskService.updateTaskStatus(taskId, newStatus);
+      const updatedTask = await TaskService.updateTaskStatus(taskId, newStatus, currentUser!);
       if (updatedTask) {
         setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
       }
@@ -357,7 +360,7 @@ const App: React.FC = () => {
 
     // Background Update
     try {
-      const updatedTask = await TaskService.updateTask(taskId, { priority: newPriority });
+      const updatedTask = await TaskService.updateTask(taskId, { priority: newPriority }, currentUser!);
       if (updatedTask) {
         setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
       }
@@ -368,6 +371,9 @@ const App: React.FC = () => {
   };
 
   const handlePauseTimer = async (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || (currentUser && task.owner_id !== currentUser.id)) return;
+
     // Optimistic Update
     const now = new Date().toISOString();
     setTasks(prevTasks => prevTasks.map(t => {
@@ -397,6 +403,9 @@ const App: React.FC = () => {
   };
 
   const handleResumeTimer = async (taskId: string) => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || (currentUser && task.owner_id !== currentUser.id)) return;
+
     // Optimistic Update
     const now = new Date().toISOString();
     setTasks(prevTasks => prevTasks.map(t => {
@@ -629,11 +638,18 @@ const App: React.FC = () => {
     e.preventDefault();
     if (!draggedTaskId || !dropTarget) return;
 
+    const task = tasks.find(t => t.id === draggedTaskId);
+    if (!task || (currentUser && task.owner_id !== currentUser.id)) {
+      setDraggedTaskId(null);
+      setDropTarget(null);
+      return;
+    }
+
     // Optimistic
     const now = new Date().toISOString();
     setTasks(prev => prev.map(t => t.id === draggedTaskId ? { ...t, status: dropTarget.status, updated_at: now } : t));
 
-    const updatedTask = await TaskService.reorderTask(draggedTaskId, dropTarget.status, dropTarget.index);
+    const updatedTask = await TaskService.reorderTask(draggedTaskId, dropTarget.status, dropTarget.index, currentUser!);
     if (updatedTask) {
       setTasks(prev => prev.map(t => t.id === draggedTaskId ? updatedTask : t));
     }
@@ -703,11 +719,13 @@ const App: React.FC = () => {
                   <TaskCard 
                     task={task} 
                     language={language} 
+                    currentUserId={currentUser?.id}
                     userName={assignee?.name || 'User'} 
                     userAvatar={assignee?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(task.owner_id)}`}
                     onPause={() => handlePauseTimer(task.id)}
                     onResume={() => handleResumeTimer(task.id)}
                     onDelete={async () => {
+                      if (currentUser && task.owner_id !== currentUser.id) return;
                       const deletedId = await TaskService.deleteTask(task.id);
                       if (deletedId) setTasks(prev => prev.filter(t => t.id !== deletedId));
                     }}
@@ -965,7 +983,7 @@ const App: React.FC = () => {
       </div>
 
       {editingTask && <EditTaskModal task={editingTask} language={language} onClose={() => setEditingTask(null)} onSave={async (taskId, updates) => {
-        const updatedTask = await TaskService.updateTask(taskId, updates);
+        const updatedTask = await TaskService.updateTask(taskId, updates, currentUser!);
         if (updatedTask) setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
       }} /> }
       

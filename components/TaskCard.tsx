@@ -7,6 +7,7 @@ import { translations } from '../translations';
 interface TaskCardProps {
   task: Task;
   language: Language;
+  currentUserId?: string;
   userName: string;
   userAvatar: string;
   onPause: () => void;
@@ -37,6 +38,7 @@ if (typeof window !== 'undefined') {
 const TaskCard: React.FC<TaskCardProps> = ({
   task,
   language,
+  currentUserId,
   userName,
   userAvatar,
   onPause,
@@ -154,13 +156,14 @@ const TaskCard: React.FC<TaskCardProps> = ({
 
   const isDone = task.status === TaskStatus.DONE;
   const isClosed = task.is_closed;
+  const isOwner = currentUserId === task.owner_id;
   const currentPriority = priorityStyles[task.priority];
   const anyMenuOpen = isMoveMenuOpen || isPriorityMenuOpen;
 
   return (
     <div
       ref={cardRef}
-      draggable={!isClosed}
+      draggable={!isClosed && isOwner}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onMouseMove={handleMouseMove}
@@ -209,9 +212,9 @@ const TaskCard: React.FC<TaskCardProps> = ({
         {!isClosed && (
           <div className="flex items-center gap-1.5" ref={menuRef}>
             <div className={`flex items-center bg-white/95 dark:bg-slate-950/95 backdrop-blur-md rounded-full px-1.5 py-1 border border-slate-200 dark:border-slate-800 transition-all duration-300 shadow-xl ${isHovered || isMoveMenuOpen ? 'opacity-100 translate-x-0' : 'opacity-0 translate-x-2 pointer-events-none'}`}>
-              <button onClick={(e) => { e.stopPropagation(); setIsMoveMenuOpen(!isMoveMenuOpen); }} className={`p-1.5 rounded-full transition-all ${isMoveMenuOpen ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' : 'text-slate-400 hover:text-indigo-500'}`} title={translations[language].task.move_status}><ArrowRightLeft size={14} /></button>
-              <button onClick={(e) => { e.stopPropagation(); onEdit(); }} className="p-1.5 text-slate-400 hover:text-indigo-500 transition-all"><Pencil size={14} /></button>
-              <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="p-1.5 text-slate-400 hover:text-rose-500 transition-all"><Trash2 size={14} /></button>
+              {isOwner && <button onClick={(e) => { e.stopPropagation(); setIsMoveMenuOpen(!isMoveMenuOpen); }} className={`p-1.5 rounded-full transition-all ${isMoveMenuOpen ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/30' : 'text-slate-400 hover:text-indigo-500'}`} title={translations[language].task.move_status}><ArrowRightLeft size={14} /></button>}
+              <button onClick={(e) => { e.stopPropagation(); onEdit(); }} className="p-1.5 text-slate-400 hover:text-indigo-500 transition-all" title={translations[language].task.edit}><Pencil size={14} /></button>
+              {isOwner && <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="p-1.5 text-slate-400 hover:text-rose-500 transition-all" title={translations[language].task.delete}><Trash2 size={14} /></button>}
             </div>
             {isMoveMenuOpen && (
               <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[1.5rem] shadow-[0_20px_50px_-10px_rgba(0,0,0,0.5)] overflow-hidden z-[100] animate-in zoom-in-95 duration-200 p-1.5 ring-1 ring-black/5 dark:ring-white/5 isolate">
@@ -288,8 +291,22 @@ const TaskCard: React.FC<TaskCardProps> = ({
 
       <div className="flex items-center justify-between pt-5 border-t border-slate-100 dark:border-slate-800/50 pl-1.5 relative z-20 gap-3">
         <div className="flex items-center gap-3 group/user min-w-0">
-          <div className="relative shrink-0"><img src={userAvatar} className={`w-8 h-8 rounded-xl shadow-md border border-white dark:border-slate-800 transition-transform object-cover ${isHovered ? 'scale-110' : ''}`} alt={userName} /><div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 border border-white dark:border-slate-900 rounded-full ${isDone ? 'bg-emerald-500' : 'bg-emerald-500 animate-pulse'}`} /></div>
-          <div className="flex flex-col min-w-0"><span className="text-[12px] font-black text-slate-800 dark:text-slate-100 truncate leading-tight">{userName}</span><span className="text-[9px] font-bold text-slate-400 dark:text-slate-700 uppercase tracking-widest">{translations[language].task.assignee}</span></div>
+          <div className="relative shrink-0">
+            <img src={userAvatar} className={`w-8 h-8 rounded-xl shadow-md border border-white dark:border-slate-800 transition-transform object-cover ${isHovered ? 'scale-110' : ''}`} alt={userName} />
+            <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 border border-white dark:border-slate-900 rounded-full ${isDone ? 'bg-emerald-500' : 'bg-emerald-500 animate-pulse'}`} />
+          </div>
+          <div className="flex flex-col min-w-0">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[12px] font-black text-slate-800 dark:text-slate-100 truncate leading-tight">{userName}</span>
+              {task.last_modified_by_id && (
+                <div className="flex items-center gap-1 px-1.5 py-0.5 bg-indigo-500/10 border border-indigo-500/20 rounded-md shadow-sm animate-in fade-in zoom-in-95 duration-500" title={`Modified by ${task.last_modified_by_name}`}>
+                  <Sparkles size={10} className="text-indigo-500" fill="currentColor" />
+                  <span className="text-[7px] font-black text-indigo-600 dark:text-indigo-400 uppercase tracking-tighter">MOD</span>
+                </div>
+              )}
+            </div>
+            <span className="text-[9px] font-bold text-slate-400 dark:text-slate-700 uppercase tracking-widest">{translations[language].task.assignee}</span>
+          </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {task.is_new && task.status === TaskStatus.TO_DO && (
@@ -299,13 +316,20 @@ const TaskCard: React.FC<TaskCardProps> = ({
               </div>
           )}
           {task.status === TaskStatus.IN_PROGRESS ? (
-            <Timer 
-              startedAt={task.in_progress_started_at} 
-              baseSeconds={task.total_work_seconds} 
-              isPaused={task.is_timer_paused} 
-              onPause={onPause} 
-              onResume={onResume} 
-            />
+            isOwner ? (
+              <Timer
+                startedAt={task.in_progress_started_at}
+                baseSeconds={task.total_work_seconds}
+                isPaused={task.is_timer_paused}
+                onPause={onPause}
+                onResume={onResume}
+              />
+            ) : (
+              <div className="flex flex-col items-end">
+                <span className="text-[9px] font-black uppercase tracking-widest text-indigo-500 mb-0.5">Timer Active</span>
+                <span className="text-[14px] font-black dark:text-white font-mono leading-none tracking-tight">PROTECTED</span>
+              </div>
+            )
           ) : isDone ? (
             <div className="flex items-center gap-3">
               <div className="flex flex-col items-end">

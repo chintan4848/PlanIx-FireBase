@@ -510,7 +510,16 @@ const LoginModal: React.FC<LoginModalProps> = ({ language, onLogin }) => {
                 </button>
 
                 <div className="flex flex-col items-center gap-8 w-full border-t border-white/5 pt-8">
-                  {mode !== 'login' && (
+                  {mode === 'login' ? (
+                    <div className="flex flex-col items-center gap-4">
+                      <button type="button" onClick={() => setMode('register')} className="text-[11px] font-black uppercase tracking-[0.3em] text-indigo-400 hover:text-white transition-all">
+                        {t.no_account}
+                      </button>
+                      <button type="button" onClick={() => setMode('forgot')} className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500 hover:text-indigo-400 transition-all">
+                        {t.forgot_link}
+                      </button>
+                    </div>
+                  ) : (
                     <button type="button" onClick={() => { setMode('login'); setRecoveryStep(1); setRecoveryUser(null); setError(null); setSuccessMsg(null); setMockEmailReceived(null); }} className="flex items-center gap-4 text-[12px] font-black uppercase tracking-[0.4em] text-indigo-400 hover:text-white transition-all group">
                       <ChevronLeft size={20} strokeWidth={4} className="group-hover:-translate-x-1 transition-transform" />
                       Back to Base
