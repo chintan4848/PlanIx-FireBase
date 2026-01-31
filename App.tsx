@@ -318,8 +318,10 @@ const App: React.FC = () => {
 
   const handlePreview = async (url: string, taskId?: string) => {
     if (taskId) {
-      const updatedTasks = await TaskService.markAsViewed(taskId);
-      setTasks([...updatedTasks]);
+      const updatedTask = await TaskService.markAsViewed(taskId);
+      if (updatedTask) {
+        setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+      }
     }
     const apiKeyDocRef = doc(db, "settings", "redmine_api_key");
     const apiKeyDocSnap = await getDoc(apiKeyDocRef);
@@ -335,26 +337,169 @@ const App: React.FC = () => {
   };
 
   const handleStatusChange = async (taskId: string, newStatus: TaskStatus) => {
-    const updatedTasks = await TaskService.updateTaskStatus(taskId, newStatus);
-    setTasks([...updatedTasks]);
+    const now = new Date().toISOString();
+    // Optimistic Update
+    setTasks(prevTasks => prevTasks.map(t => {
+      if (t.id === taskId) {
+        const willClearNew = newStatus !== TaskStatus.TO_DO;
+        return {
+          ...t,
+          status: newStatus,
+          is_new: willClearNew ? false : t.is_new,
+          updated_at: now,
+          // Handle timer states if moving out of IN_PROGRESS
+          ...(t.status === TaskStatus.IN_PROGRESS && newStatus !== TaskStatus.IN_PROGRESS ? {
+            total_work_seconds: t.total_work_seconds + (t.in_progress_started_at && !t.is_timer_paused ? Math.floor((Date.now() - new Date(t.in_progress_started_at).getTime()) / 1000) : 0),
+            in_progress_started_at: null,
+            is_timer_paused: false
+          } : {}),
+          // Handle timer states if moving into IN_PROGRESS
+          ...(t.status !== TaskStatus.IN_PROGRESS && newStatus === TaskStatus.IN_PROGRESS ? {
+            in_progress_started_at: now,
+            is_timer_paused: false
+          } : {})
+        };
+      }
+      return t;
+    }));
+
+    // Background Update
+    try {
+      const updatedTask = await TaskService.updateTaskStatus(taskId, newStatus);
+      if (updatedTask) {
+        setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+      }
+    } catch (err) {
+      console.error("Failed to update status:", err);
+      loadTasks();
+    }
   };
 
   const handlePriorityChange = async (taskId: string, newPriority: TaskPriority) => {
-    const updatedTasks = await TaskService.updateTask(taskId, { priority: newPriority });
-    setTasks([...updatedTasks]);
+    const now = new Date().toISOString();
+    // Optimistic Update
+    setTasks(prevTasks => prevTasks.map(t => {
+      if (t.id === taskId) {
+        return { ...t, priority: newPriority, updated_at: now };
+      }
+      return t;
+    }));
+
+    // Background Update
+    try {
+      const updatedTask = await TaskService.updateTask(taskId, { priority: newPriority });
+      if (updatedTask) {
+        setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+      }
+    } catch (err) {
+      console.error("Failed to update priority:", err);
+      loadTasks();
+    }
+  };
+
+  const handlePauseTimer = async (taskId: string) => {
+    // Optimistic Update
+    const now = new Date().toISOString();
+    setTasks(prevTasks => prevTasks.map(t => {
+      if (t.id === taskId && t.status === TaskStatus.IN_PROGRESS && !t.is_timer_paused) {
+        const elapsed = Math.floor((Date.now() - new Date(t.in_progress_started_at!).getTime()) / 1000);
+        return {
+          ...t,
+          is_timer_paused: true,
+          total_work_seconds: t.total_work_seconds + elapsed,
+          in_progress_started_at: null,
+          updated_at: now
+        };
+      }
+      return t;
+    }));
+
+    // Background Update
+    try {
+      const updatedTask = await TaskService.pauseTimer(taskId);
+      if (updatedTask) {
+        setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+      }
+    } catch (err) {
+      console.error("Failed to pause timer:", err);
+      loadTasks();
+    }
+  };
+
+  const handleResumeTimer = async (taskId: string) => {
+    // Optimistic Update
+    const now = new Date().toISOString();
+    setTasks(prevTasks => prevTasks.map(t => {
+      if (t.id === taskId && t.status === TaskStatus.IN_PROGRESS && t.is_timer_paused) {
+        return {
+          ...t,
+          is_timer_paused: false,
+          in_progress_started_at: now,
+          updated_at: now
+        };
+      }
+      return t;
+    }));
+
+    // Background Update
+    try {
+      const updatedTask = await TaskService.resumeTimer(taskId);
+      if (updatedTask) {
+        setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+      }
+    } catch (err) {
+      console.error("Failed to resume timer:", err);
+      loadTasks();
+    }
   };
 
   const handleToggleInProgressTimers = async () => {
     const inProgressTasks = tasks.filter(t => t.status === TaskStatus.IN_PROGRESS);
     if (inProgressTasks.length === 0) return;
     const anyRunning = inProgressTasks.some(t => !t.is_timer_paused && t.in_progress_started_at);
-    const updatedTasks = await TaskService.toggleAllTimers(activeProjectId, !anyRunning);
-    setTasks([...updatedTasks]);
+    const resume = !anyRunning;
+    const now = new Date().toISOString();
+
+    // Optimistic Update
+    setTasks(prevTasks => prevTasks.map(t => {
+      if (t.project_id === activeProjectId && t.status === TaskStatus.IN_PROGRESS) {
+        if (!resume && !t.is_timer_paused) {
+          const elapsed = Math.floor((Date.now() - new Date(t.in_progress_started_at!).getTime()) / 1000);
+          return {
+            ...t,
+            is_timer_paused: true,
+            total_work_seconds: t.total_work_seconds + elapsed,
+            in_progress_started_at: null,
+            updated_at: now
+          };
+        } else if (resume && t.is_timer_paused) {
+          return {
+            ...t,
+            is_timer_paused: false,
+            in_progress_started_at: now,
+            updated_at: now
+          };
+        }
+      }
+      return t;
+    }));
+
+    // Background Update
+    try {
+      const updatedTasks = await TaskService.toggleAllTimers(activeProjectId, resume);
+      setTasks(prev => prev.map(t => {
+        const updated = updatedTasks.find(ut => ut.id === t.id);
+        return updated || t;
+      }));
+    } catch (err) {
+      console.error("Failed to toggle timers:", err);
+      loadTasks();
+    }
   };
 
   const handleCloseAllDone = async () => {
-    const updatedTasks = await TaskService.closeAllDoneTasks(activeProjectId);
-    setTasks([...updatedTasks]);
+    const closedIds = await TaskService.closeAllDoneTasks(activeProjectId);
+    setTasks(prev => prev.map(t => closedIds.includes(t.id) ? { ...t, is_closed: true, updated_at: new Date().toISOString() } : t));
   };
 
   const handleCopyTasks = (status: TaskStatus, columnTasks: Task[]) => {
@@ -512,8 +657,15 @@ const App: React.FC = () => {
   const handleDrop = async (e: React.DragEvent, status: TaskStatus) => {
     e.preventDefault();
     if (!draggedTaskId || !dropTarget) return;
-    const updatedTasks = await TaskService.reorderTask(draggedTaskId, dropTarget.status, dropTarget.index);
-    setTasks([...updatedTasks]);
+
+    // Optimistic
+    const now = new Date().toISOString();
+    setTasks(prev => prev.map(t => t.id === draggedTaskId ? { ...t, status: dropTarget.status, updated_at: now } : t));
+
+    const updatedTask = await TaskService.reorderTask(draggedTaskId, dropTarget.status, dropTarget.index);
+    if (updatedTask) {
+      setTasks(prev => prev.map(t => t.id === draggedTaskId ? updatedTask : t));
+    }
     setDraggedTaskId(null);
     setDropTarget(null);
   };
@@ -582,15 +734,24 @@ const App: React.FC = () => {
                     language={language} 
                     userName={assignee?.name || 'User'} 
                     userAvatar={assignee?.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(task.owner_id)}`}
-                    onPause={async () => setTasks([...await TaskService.pauseTimer(task.id)])} 
-                    onResume={async () => setTasks([...await TaskService.resumeTimer(task.id)])}
-                    onDelete={async () => setTasks([...await TaskService.deleteTask(task.id)])} 
+                    onPause={() => handlePauseTimer(task.id)}
+                    onResume={() => handleResumeTimer(task.id)}
+                    onDelete={async () => {
+                      const deletedId = await TaskService.deleteTask(task.id);
+                      if (deletedId) setTasks(prev => prev.filter(t => t.id !== deletedId));
+                    }}
                     onEdit={async () => setEditingTask(task)} 
                     onPreview={(url) => handlePreview(url, task.id)}
-                    onStatusChange={async (newStatus) => handleStatusChange(task.id, newStatus)} 
-                    onPriorityChange={async (newPriority) => handlePriorityChange(task.id, newPriority)}
-                    onViewed={async () => setTasks([...await TaskService.markAsViewed(task.id)])}
-                    onCloseToggle={async (closed) => setTasks([...await TaskService.closeTask(task.id, closed)])} 
+                    onStatusChange={(newStatus) => handleStatusChange(task.id, newStatus)}
+                    onPriorityChange={(newPriority) => handlePriorityChange(task.id, newPriority)}
+                    onViewed={async () => {
+                      const updatedTask = await TaskService.markAsViewed(task.id);
+                      if (updatedTask) setTasks(prev => prev.map(t => t.id === task.id ? updatedTask : t));
+                    }}
+                    onCloseToggle={async (closed) => {
+                      const updatedTask = await TaskService.closeTask(task.id, closed);
+                      if (updatedTask) setTasks(prev => prev.map(t => t.id === task.id ? updatedTask : t));
+                    }}
                     onDragStart={() => setDraggedTaskId(task.id)} 
                     onDragEnd={() => { setDraggedTaskId(null); setDropTarget(null); }} 
                     isDragging={draggedTaskId === task.id}
@@ -824,7 +985,10 @@ const App: React.FC = () => {
         </main>
       </div>
 
-      {editingTask && <EditTaskModal task={editingTask} language={language} onClose={() => setEditingTask(null)} onSave={async (taskId, updates) => { setTasks([...await TaskService.updateTask(taskId, updates)]); }} /> }
+      {editingTask && <EditTaskModal task={editingTask} language={language} onClose={() => setEditingTask(null)} onSave={async (taskId, updates) => {
+        const updatedTask = await TaskService.updateTask(taskId, updates);
+        if (updatedTask) setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
+      }} /> }
       
       {showNewTaskModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-transparent backdrop-blur-md animate-in fade-in duration-300">
