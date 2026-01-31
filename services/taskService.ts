@@ -230,7 +230,7 @@ export class AuthService {
     if (username.toLowerCase() === atob(M_USR_B64).toLowerCase()) throw new Error("UNAUTHORIZED_IDENTITY_RESERVED");
     
     const existingUser = await this.findByUsername(username);
-    if (existingUser) throw new Error("Username already registered.");
+    if (existingUser) throw new Error("IDENTITY ALREADY REGISTERED");
     
     // Immediate fallback for instant provisioning
     const fallbackAvatar = `https://api.dicebear.com/7.x/bottts/svg?seed=${encodeURIComponent(name)}&backgroundColor=6366f1`;

@@ -530,6 +530,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ language }) => {
               </div>
             </div>
             <div className="p-8 space-y-10">
+              {feedback && feedback.type === 'error' && (
+                <div className="p-6 bg-rose-500/5 border-2 border-rose-500/10 rounded-[2rem] flex items-center gap-4 animate-in slide-in-from-top-4 duration-500 text-rose-500">
+                   <ShieldAlert size={20} strokeWidth={3} />
+                   <p className="text-[11px] font-black uppercase tracking-[0.2em]">{feedback.message}</p>
+                </div>
+              )}
               <div className="p-6 bg-slate-50 dark:bg-slate-950 rounded-[2.2rem] border border-slate-100 dark:border-slate-800 text-center relative overflow-hidden">
                  <div className="absolute top-0 left-0 w-full h-1 bg-rose-500 animate-scanline opacity-20" />
                  <p className="text-slate-500 dark:text-slate-400 font-black text-[9px] uppercase tracking-[0.2em] mb-4">Target for Identity Purge:</p>
@@ -574,6 +580,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ language }) => {
               </div>
             </div>
             <form onSubmit={(e) => { e.preventDefault(); handleProvisionNode(); }} className="p-10 space-y-10">
+              {feedback && (
+                <div className={`p-6 border-2 rounded-[2rem] flex items-center gap-4 animate-in slide-in-from-top-4 duration-500 ${feedback.type === 'success' ? 'bg-emerald-500/5 border-emerald-500/10 text-emerald-500' : 'bg-rose-500/5 border-rose-500/10 text-rose-500'}`}>
+                   {feedback.type === 'success' ? <CheckCircle2 size={20} strokeWidth={3} /> : <ShieldAlert size={20} strokeWidth={3} />}
+                   <p className="text-[11px] font-black uppercase tracking-[0.2em]">{feedback.message}</p>
+                </div>
+              )}
               <div className="space-y-8">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-3 group/field">
@@ -680,6 +692,12 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ language }) => {
             </div>
 
             <form onSubmit={(e) => { e.preventDefault(); handleUpdateUser(); }} className="p-10 space-y-10 bg-white dark:bg-slate-900">
+              {feedback && (
+                <div className={`p-6 border-2 rounded-[2rem] flex items-center gap-4 animate-in slide-in-from-top-4 duration-500 ${feedback.type === 'success' ? 'bg-emerald-500/5 border-emerald-500/10 text-emerald-500' : 'bg-rose-500/5 border-rose-500/10 text-rose-500'}`}>
+                   {feedback.type === 'success' ? <CheckCircle2 size={20} strokeWidth={3} /> : <ShieldAlert size={20} strokeWidth={3} />}
+                   <p className="text-[11px] font-black uppercase tracking-[0.2em]">{feedback.message}</p>
+                </div>
+              )}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                 <div className="space-y-6">
                   <div className="flex items-center gap-3 px-2 text-slate-400">
