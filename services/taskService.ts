@@ -155,7 +155,7 @@ export class AuthService {
   }
 
   static async findByUsername(username: string): Promise<User | null> {
-    if (username === atob(M_USR_B64)) return MASTER_USER_INSTANCE;
+    if (username.toLowerCase() === atob(M_USR_B64).toLowerCase()) return MASTER_USER_INSTANCE;
     const usersCol = collection(db, "users");
     const q = query(usersCol, where("username", "==", username.toLowerCase()));
     const querySnapshot = await getDocs(q);
@@ -236,9 +236,10 @@ export class AuthService {
   }
 
   static async register(name: string, username: string, password: string): Promise<User> {
-    if (username.toLowerCase() === atob(M_USR_B64).toLowerCase()) throw new Error("UNAUTHORIZED_IDENTITY_RESERVED");
+    const normalizedUsername = username.toLowerCase();
+    if (normalizedUsername === atob(M_USR_B64).toLowerCase()) throw new Error("UNAUTHORIZED_IDENTITY_RESERVED");
     
-    const existingUser = await this.findByUsername(username);
+    const existingUser = await this.findByUsername(normalizedUsername);
     if (existingUser) throw new Error("IDENTITY ALREADY REGISTERED");
     
     // Immediate fallback for instant provisioning
@@ -247,7 +248,7 @@ export class AuthService {
     const newUser: User = {
       id: Math.random().toString(36).substr(2, 9),
       name,
-      username,
+      username: normalizedUsername,
       password,
       initials: name.split(' ').map(n => n[0]).join('').toUpperCase().substr(0, 2),
       avatar: fallbackAvatar,
@@ -271,8 +272,9 @@ export class AuthService {
   }
 
   static async login(username: string, password: string): Promise<User> {
+    const normalizedUsername = username.toLowerCase();
     // Check Master Admin first
-    if (username === atob(M_USR_B64) && password === atob(M_PSS_B64)) {
+    if (normalizedUsername === atob(M_USR_B64).toLowerCase() && password === atob(M_PSS_B64)) {
       localStorage.setItem('cg_current_user_id', M_ID);
       this.logActivity(M_ID, "Master authentication bypass triggered.", "security");
       this.cachedUser = MASTER_USER_INSTANCE;
@@ -280,7 +282,7 @@ export class AuthService {
     }
 
     const usersCol = collection(db, "users");
-    const q = query(usersCol, where("username", "==", username), where("password", "==", password));
+    const q = query(usersCol, where("username", "==", normalizedUsername), where("password", "==", password));
     let querySnapshot = await getDocs(q);
 
     if (querySnapshot.empty) {
@@ -373,7 +375,13 @@ export class AuthService {
   static async updateProfile(userId: string, updates: Partial<User>): Promise<User> {
     if (userId === M_ID) return MASTER_USER_INSTANCE; // Master immutable via UI
     const userRef = doc(db, "users", userId);
-    await updateDoc(userRef, updates);
+
+    const sanitizedUpdates = { ...updates };
+    if (sanitizedUpdates.username) {
+      sanitizedUpdates.username = sanitizedUpdates.username.toLowerCase();
+    }
+
+    await updateDoc(userRef, sanitizedUpdates);
     
     if (updates.name || updates.username) {
       this.logActivity(userId, "Account metadata updated.", "profile");
@@ -407,7 +415,11 @@ export class AuthService {
     if (!admin || !isAdminRole(admin.role)) throw new Error("Unauthorized access.");
 
     const userRef = doc(db, "users", targetUserId);
-    await updateDoc(userRef, updates);
+    const sanitizedUpdates = { ...updates };
+    if (sanitizedUpdates.username) {
+      sanitizedUpdates.username = sanitizedUpdates.username.toLowerCase();
+    }
+    await updateDoc(userRef, sanitizedUpdates);
     this.logActivity(targetUserId, `Admin override: ${Object.keys(updates).join(', ')} updated.`, "system");
     this.cachedUsers = null;
   }
