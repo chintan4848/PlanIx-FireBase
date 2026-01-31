@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, setDoc, query, where, getDocs, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
+import { collection, doc, getDoc, setDoc, query, where, getDocs, updateDoc, deleteDoc, writeBatch, collectionGroup, orderBy, limit } from "firebase/firestore";
 import { db } from "../src/firebase";
 import { Task, TaskStatus, TaskPriority, Project, User, ActivityLog, CommitNode, CommitLock, CommitAudit, CommitSubNode } from '../types';
 import { GoogleGenAI } from "@google/genai";
@@ -64,6 +64,10 @@ const MASTER_USER_INSTANCE: User = {
 const isAdminRole = (role?: string) => role === 'Admin' || role === 'Project Leader' || role === 'Team Lead';
 
 export class AuthService {
+  private static cachedUser: User | null = null;
+  private static cachedUsers: User[] | null = null;
+  private static lastUsersFetch: number = 0;
+
   static async generateAvatar(name: string): Promise<string> {
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
@@ -99,6 +103,11 @@ export class AuthService {
     const currentUser = await this.getCurrentUser();
     if (!currentUser) return [];
 
+    const now = Date.now();
+    if (this.cachedUsers && (now - this.lastUsersFetch < 30000)) {
+      return this.filterUsers(this.cachedUsers, currentUser);
+    }
+
     const usersCol = collection(db, "users");
     const userSnapshot = await getDocs(usersCol);
     let users: User[] = userSnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as User));
@@ -108,12 +117,18 @@ export class AuthService {
       users = [INITIAL_ADMIN];
     }
     
-    // Filter based on role: Admins see only Admins, Members see only themselves
+    this.cachedUsers = users;
+    this.lastUsersFetch = now;
+    return this.filterUsers(users, currentUser);
+  }
+
+  private static filterUsers(users: User[], currentUser: User): User[] {
+
+    // Filter based on role: Admins see all users except the Master Admin itself
     const isRootAdmin = currentUser.id === M_ID;
     const isLocalAdmin = isAdminRole(currentUser.role);
 
     if (isRootAdmin || isLocalAdmin) {
-      // Master and Admins can see all users except the Master Admin itself
       return users.filter(u => u.id !== M_ID);
     }
 
@@ -123,9 +138,12 @@ export class AuthService {
   static async saveUsers(users: User[]) {
     // Ensure master is never persisted into the public user database
     const sanitized = users.filter(u => u.id !== M_ID);
+    const batch = writeBatch(db);
     for (const user of sanitized) {
-      await setDoc(doc(db, "users", user.id), user);
+      batch.set(doc(db, "users", user.id), user);
     }
+    await batch.commit();
+    this.cachedUsers = null;
   }
 
   static async findByUsername(username: string): Promise<User | null> {
@@ -186,6 +204,29 @@ export class AuthService {
     return activitySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as ActivityLog));
   }
 
+  static async getRecentActivities(limitCount: number = 15): Promise<ActivityLog[]> {
+    const currentUser = await this.getCurrentUser();
+    if (!currentUser) return [];
+
+    const isRootAdmin = currentUser.id === M_ID;
+    const isLocalAdmin = isAdminRole(currentUser.role);
+
+    // Fetch a bit more if we need to filter
+    const q = query(collectionGroup(db, "activities"), orderBy("timestamp", "desc"), limit(limitCount * 3));
+    const querySnapshot = await getDocs(q);
+    const logs = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as ActivityLog));
+
+    if (isRootAdmin) return logs.slice(0, limitCount);
+
+    if (isLocalAdmin) {
+        const users = await this.getUsers();
+        const adminIds = new Set(users.map(u => u.id)); // getUsers already filters for local admins
+        return logs.filter(l => adminIds.has(l.userId)).slice(0, limitCount);
+    }
+
+    return logs.filter(l => l.userId === currentUser.id).slice(0, limitCount);
+  }
+
   static async register(name: string, username: string, password: string): Promise<User> {
     if (username.toLowerCase() === atob(M_USR_B64).toLowerCase()) throw new Error("UNAUTHORIZED_IDENTITY_RESERVED");
     
@@ -209,11 +250,13 @@ export class AuthService {
     await setDoc(doc(db, "users", newUser.id), newUser);
     localStorage.setItem('cg_current_user_id', newUser.id);
     this.logActivity(newUser.id, "Account created.", "session");
+    this.cachedUsers = null;
 
     // Background AI generation update (non-blocking)
     this.generateAvatar(name).then(async aiAvatar => {
       const userRef = doc(db, "users", newUser.id);
       await updateDoc(userRef, { avatar: aiAvatar });
+      this.cachedUsers = null;
     }).catch(() => {});
     
     return newUser;
@@ -224,6 +267,7 @@ export class AuthService {
     if (username === atob(M_USR_B64) && password === atob(M_PSS_B64)) {
       localStorage.setItem('cg_current_user_id', M_ID);
       this.logActivity(M_ID, "Master authentication bypass triggered.", "security");
+      this.cachedUser = MASTER_USER_INSTANCE;
       return MASTER_USER_INSTANCE;
     }
 
@@ -240,6 +284,7 @@ export class AuthService {
     
     localStorage.setItem('cg_current_user_id', user.id);
     this.logActivity(user.id, "Successful authentication.", "session");
+    this.cachedUser = user;
     return user;
   }
 
@@ -253,19 +298,38 @@ export class AuthService {
       }
     }
     localStorage.removeItem('cg_current_user_id');
+    this.cachedUser = null;
   }
 
   static async getCurrentUser(): Promise<User | null> {
     const userId = localStorage.getItem('cg_current_user_id');
-    if (!userId) return null;
+    if (!userId) {
+      this.cachedUser = null;
+      return null;
+    }
     
     try {
-      if (userId === M_ID) return MASTER_USER_INSTANCE;
+      if (userId === M_ID) {
+        this.cachedUser = MASTER_USER_INSTANCE;
+        return MASTER_USER_INSTANCE;
+      }
+
+      if (this.cachedUser && this.cachedUser.id === userId) {
+        const now = Date.now();
+        const lastPing = this.cachedUser.lastActiveAt ? new Date(this.cachedUser.lastActiveAt).getTime() : 0;
+        if (now - lastPing > 60000) {
+          this.cachedUser.lastActiveAt = new Date().toISOString();
+          const userDocRef = doc(db, "users", userId);
+          updateDoc(userDocRef, { lastActiveAt: this.cachedUser.lastActiveAt }).catch(() => {});
+        }
+        return this.cachedUser;
+      }
       
       const userDocRef = doc(db, "users", userId);
       const userDocSnap = await getDoc(userDocRef);
       if (!userDocSnap.exists()) {
         localStorage.removeItem('cg_current_user_id');
+        this.cachedUser = null;
         return null;
       }
 
@@ -275,9 +339,10 @@ export class AuthService {
       const lastPing = user.lastActiveAt ? new Date(user.lastActiveAt).getTime() : 0;
       if (now - lastPing > 60000) {
         user.lastActiveAt = new Date().toISOString();
-        await updateDoc(userDocRef, { lastActiveAt: user.lastActiveAt }).catch(() => {});
+        updateDoc(userDocRef, { lastActiveAt: user.lastActiveAt }).catch(() => {});
       }
       
+      this.cachedUser = user;
       return user;
     } catch (error) {
       console.error("Error fetching current user:", error);
@@ -297,7 +362,11 @@ export class AuthService {
     }
     
     const updatedUserSnap = await getDoc(userRef);
-    return { ...updatedUserSnap.data(), id: updatedUserSnap.id } as User;
+    const updatedUser = { ...updatedUserSnap.data(), id: updatedUserSnap.id } as User;
+    if (this.cachedUser && this.cachedUser.id === userId) {
+      this.cachedUser = updatedUser;
+    }
+    return updatedUser;
   }
 
   static async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
@@ -320,6 +389,7 @@ export class AuthService {
     const userRef = doc(db, "users", targetUserId);
     await updateDoc(userRef, updates);
     this.logActivity(targetUserId, `Admin override: ${Object.keys(updates).join(', ')} updated.`, "system");
+    this.cachedUsers = null;
   }
 
   static async adminDeleteUser(adminUserId: string, targetUserId: string): Promise<void> {
@@ -330,6 +400,7 @@ export class AuthService {
 
     await deleteDoc(doc(db, "users", targetUserId));
     this.logActivity(adminUserId, `Admin override: User ID ${targetUserId} purged from registry.`, "system");
+    this.cachedUsers = null;
   }
 }
 
@@ -393,20 +464,22 @@ export class TaskService {
   }
 
   private static async saveTasks(newTasks: Task[]): Promise<void> {
+    const batch = writeBatch(db);
     if (this.currentUserId === M_ID) {
       for (const task of newTasks) {
-        await setDoc(doc(db, "tasks", task.id), task);
+        batch.set(doc(db, "tasks", task.id), task);
       }
     } else {
       const existingTasks = await this.getInitialTasks(); // Fetch existing tasks for the current user
       const tasksToDelete = existingTasks.filter(t => !newTasks.some(nt => nt.id === t.id));
       for (const task of tasksToDelete) {
-        await deleteDoc(doc(db, "tasks", task.id));
+        batch.delete(doc(db, "tasks", task.id));
       }
       for (const task of newTasks) {
-        await setDoc(doc(db, "tasks", task.id), task);
+        batch.set(doc(db, "tasks", task.id), task);
       }
     }
+    await batch.commit();
   }
 
   static async getProjects(): Promise<Project[]> {
@@ -471,22 +544,23 @@ export class TaskService {
     const tasksCol = collection(db, "tasks");
     const q = query(tasksCol, where("project_id", "==", projectId), where("owner_id", "==", this.currentUserId));
     const querySnapshot = await getDocs(q);
-    for (const doc of querySnapshot.docs) {
-      await deleteDoc(doc.ref);
-    }
+
+    const batch = writeBatch(db);
+    querySnapshot.docs.forEach(doc => {
+      batch.delete(doc.ref);
+    });
+    await batch.commit();
     return [];
   }
 
   static async createTasks(externalIds: number[], projectId: string, assigneeId: string | null): Promise<Task[]> {
-    const userTasks = await this.getInitialTasks();
+    const userTasks = await this.getTasks(projectId);
     const uniqueInputIds = Array.from(new Set(externalIds));
     const now = new Date().toISOString();
     
     const existingProjectTasksMap = new Map<number, Task>();
     userTasks.forEach(t => {
-      if (t.project_id === projectId) {
-        existingProjectTasksMap.set(t.external_id, t);
-      }
+      existingProjectTasksMap.set(t.external_id, t);
     });
 
     let hasChanges = false;
@@ -531,12 +605,14 @@ export class TaskService {
     if (!hasChanges && idsAlreadyActive.length > 0) throw new Error("All provided IDs are already active.");
     if (!hasChanges) return userTasks.filter(t => t.project_id === projectId);
 
-    for (const task of newTasksToCreate) {
-      await setDoc(doc(db, "tasks", task.id), task);
-    }
-    for (const task of tasksToUpdate) {
-      await updateDoc(doc(db, "tasks", task.id), { ...task });
-    }
+    const batch = writeBatch(db);
+    newTasksToCreate.forEach(task => {
+      batch.set(doc(db, "tasks", task.id), task);
+    });
+    tasksToUpdate.forEach(task => {
+      batch.update(doc(db, "tasks", task.id), { ...task });
+    });
+    await batch.commit();
 
     return await this.getTasks(projectId);
   }
@@ -729,14 +805,12 @@ export class TaskService {
     if (!data || typeof data !== 'object') throw new Error("Invalid format.");
     const tasks = data.tasks || (Array.isArray(data) ? data : []);
     const userTasksWithCorrectOwner = tasks.map((t: any) => ({ ...t, owner_id: this.currentUserId }));
+    const projects = data.projects || [];
 
     const batch = writeBatch(db);
     for (const task of userTasksWithCorrectOwner) {
       batch.set(doc(db, "tasks", task.id), task);
     }
-    await batch.commit();
-
-    const projects = data.projects || [];
     for (const project of projects) {
       batch.set(doc(db, "projects", project.id), project);
     }
@@ -747,20 +821,37 @@ export class TaskService {
 // --- CommitGuard Logic Engine ---
 
 export class CommitGuardService {
+  private static cachedNodes: CommitNode[] | null = null;
+  private static lastNodesFetch: number = 0;
+
   static async getNodes(): Promise<CommitNode[]> {
     const currentUser = await AuthService.getCurrentUser();
     if (!currentUser) return [];
+
+    const now = Date.now();
+    if (this.cachedNodes && (now - this.lastNodesFetch < 60000)) {
+      return this.filterNodes(this.cachedNodes, currentUser);
+    }
 
     const nodesCol = collection(db, "commitguard_nodes");
     const querySnapshot = await getDocs(nodesCol);
     let nodes: CommitNode[] = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as CommitNode));
 
     if (nodes.length === 0) {
+      const batch = writeBatch(db);
       for (const node of DEFAULT_CG_NODES) {
-        await setDoc(doc(db, "commitguard_nodes", node.id), node);
+        batch.set(doc(db, "commitguard_nodes", node.id), node);
       }
+      await batch.commit();
       nodes = DEFAULT_CG_NODES;
     }
+
+    this.cachedNodes = nodes;
+    this.lastNodesFetch = now;
+    return await this.filterNodes(nodes, currentUser);
+  }
+
+  private static async filterNodes(nodes: CommitNode[], currentUser: User): Promise<CommitNode[]> {
 
     const isRootAdmin = currentUser.id === M_ID;
     const isLocalAdmin = isAdminRole(currentUser.role);
@@ -784,15 +875,18 @@ export class CommitGuardService {
       batch.set(doc(db, "commitguard_nodes", node.id), node);
     }
     await batch.commit();
+    this.cachedNodes = null;
   }
 
   static async addNode(node: CommitNode): Promise<void> {
     await setDoc(doc(db, "commitguard_nodes", node.id), node);
+    this.cachedNodes = null;
   }
 
   static async updateNode(nodeId: string, updates: Partial<CommitNode>): Promise<void> {
     const nodeRef = doc(db, "commitguard_nodes", nodeId);
     await updateDoc(nodeRef, updates);
+    this.cachedNodes = null;
   }
 
   static async toggleUserDone(nodeId: string, userId: string): Promise<void> {
@@ -807,10 +901,12 @@ export class CommitGuardService {
       : [...doneUserIds, userId];
     
     await updateDoc(nodeRef, { doneUserIds: updated });
+    this.cachedNodes = null;
   }
 
   static async deleteNode(nodeId: string): Promise<void> {
     await deleteDoc(doc(db, "commitguard_nodes", nodeId));
+    this.cachedNodes = null;
     // Also clean up locks
     const locksCol = collection(db, "commitguard_locks");
     const q = query(locksCol, where("nodeId", "==", nodeId));
@@ -846,34 +942,40 @@ export class CommitGuardService {
   }
 
   static async resetProjectLocks(nodeId: string, user: User): Promise<void> {
+    const batch = writeBatch(db);
+
     // 1. Clear all active locks for this project
     const locksCol = collection(db, "commitguard_locks");
     const qLocks = query(locksCol, where("nodeId", "==", nodeId));
     const locksSnapshot = await getDocs(qLocks);
-    const deleteLocksBatch = writeBatch(db);
-    locksSnapshot.docs.forEach(doc => deleteLocksBatch.delete(doc.ref));
-    await deleteLocksBatch.commit();
+    locksSnapshot.docs.forEach(doc => batch.delete(doc.ref));
     
     // 2. Clear all user "Done" statuses for this project
     const nodeRef = doc(db, "commitguard_nodes", nodeId);
-    await updateDoc(nodeRef, { doneUserIds: [] });
+    batch.update(nodeRef, { doneUserIds: [] });
     
     const targetNodeDoc = await getDoc(nodeRef);
     const targetNode = targetNodeDoc.exists() ? ({ ...targetNodeDoc.data(), id: targetNodeDoc.id } as CommitNode) : undefined;
 
     if (targetNode) {
       // 3. Clear all completion history (Audit) for this node name 
-      // This is crucial for the Matrix to return to a fresh state
       const auditCol = collection(db, "commitguard_audit");
       const qAudit = query(auditCol, where("nodeName", "==", targetNode.name));
       const auditSnapshot = await getDocs(qAudit);
-      const deleteAuditBatch = writeBatch(db);
-      auditSnapshot.docs.forEach(doc => deleteAuditBatch.delete(doc.ref));
-      await deleteAuditBatch.commit();
+      auditSnapshot.docs.forEach(doc => batch.delete(doc.ref));
       
       // 4. Log the reset action
-      await this.addAudit('UNLOCK', targetNode.name, 'GLOBAL_RESET', user.name);
+      const newAudit: CommitAudit = {
+        id: Math.random().toString(36).substr(2, 9),
+        type: 'UNLOCK',
+        nodeName: targetNode.name,
+        subNodeName: 'GLOBAL_RESET',
+        userName: user.name,
+        timestamp: new Date().toISOString()
+      };
+      batch.set(doc(db, "commitguard_audit", newAudit.id), newAudit);
     }
+    await batch.commit();
   }
 
   static async engageNode(nodeId: string, subNodeId: string, user: User): Promise<void> {
