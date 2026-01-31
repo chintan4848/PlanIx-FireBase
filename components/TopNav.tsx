@@ -89,6 +89,7 @@ const TopNav: React.FC<TopNavProps> = ({
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [isUserFilterOpen, setIsUserFilterOpen] = useState(false);
+  const [userSearchQuery, setUserSearchQuery] = useState('');
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [searchValue, setSearchValue] = useState('');
@@ -116,6 +117,7 @@ const TopNav: React.FC<TopNavProps> = ({
       }
       if (userFilterRef.current && !userFilterRef.current.contains(event.target as Node)) {
         setIsUserFilterOpen(false);
+        setUserSearchQuery('');
       }
     };
     
@@ -315,28 +317,43 @@ const TopNav: React.FC<TopNavProps> = ({
               </button>
 
               {isUserFilterOpen && (
-                <div className="absolute left-0 top-full mt-2 w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl overflow-hidden z-50 animate-in zoom-in-95 duration-150">
-                  <div className="p-1.5 space-y-0.5">
-                    <p className="px-3 py-1.5 text-[9px] font-black text-slate-400 uppercase tracking-widest">Filter by User</p>
-                    <button
-                      onClick={() => { onFilterUser('All'); setIsUserFilterOpen(false); }}
-                      className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[11px] font-bold uppercase transition-all ${filterUserId === 'All' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
-                    >
-                      All Users
-                    </button>
-                    <div className="max-h-60 overflow-y-auto scrollbar-hide">
-                      {users.map((u) => (
-                        <button
-                          key={u.id}
-                          onClick={() => { onFilterUser(u.id); setIsUserFilterOpen(false); }}
-                          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[11px] font-bold uppercase transition-all ${
-                            filterUserId === u.id ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'
-                          }`}
-                        >
-                          <img src={u.avatar} className="w-5 h-5 rounded-full object-cover" alt="" />
-                          <span className="truncate">{u.name}</span>
-                        </button>
-                      ))}
+                <div className="absolute left-0 top-full mt-2 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl overflow-hidden z-50 animate-in zoom-in-95 duration-150">
+                  <div className="p-2 space-y-2">
+                    <div className="relative px-1">
+                      <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        autoFocus
+                        type="text"
+                        placeholder="Search users..."
+                        value={userSearchQuery}
+                        onChange={(e) => setUserSearchQuery(e.target.value)}
+                        className="w-full pl-8 pr-3 py-1.5 bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-xs outline-none focus:ring-2 ring-indigo-500/20"
+                      />
+                    </div>
+
+                    <div className="space-y-0.5">
+                      <button
+                        onClick={() => { onFilterUser('All'); setIsUserFilterOpen(false); setUserSearchQuery(''); }}
+                        className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[11px] font-bold uppercase transition-all ${filterUserId === 'All' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+                      >
+                        All Users
+                      </button>
+                      <div className="max-h-60 overflow-y-auto scrollbar-hide">
+                        {users
+                          .filter(u => u.name.toLowerCase().includes(userSearchQuery.toLowerCase()) || u.username.toLowerCase().includes(userSearchQuery.toLowerCase()))
+                          .map((u) => (
+                          <button
+                            key={u.id}
+                            onClick={() => { onFilterUser(u.id); setIsUserFilterOpen(false); setUserSearchQuery(''); }}
+                            className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[11px] font-bold uppercase transition-all ${
+                              filterUserId === u.id ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'
+                            }`}
+                          >
+                            <img src={u.avatar} className="w-5 h-5 rounded-full object-cover border border-white/20" alt="" />
+                            <span className="truncate">{u.name}</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>
