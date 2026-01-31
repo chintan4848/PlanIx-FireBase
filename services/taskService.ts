@@ -623,7 +623,6 @@ export class TaskService {
       }
     }
 
-    if (!hasChanges && idsAlreadyActive.length > 0) throw new Error("All provided IDs are already active.");
     if (!hasChanges) return userTasks.filter(t => t.project_id === projectId);
 
     const batch = writeBatch(db);
@@ -659,7 +658,7 @@ export class TaskService {
     return taskId;
   }
 
-  static async updateTask(taskId: string, updates: Partial<Task>): Promise<Task | null> {
+  static async updateTask(taskId: string, updates: Partial<Task>, modifier?: User): Promise<Task | null> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
     if (!taskDoc.exists()) return null;
@@ -667,11 +666,17 @@ export class TaskService {
     const targetTask = { ...taskDoc.data(), id: taskDoc.id } as Task;
 
     const willClearNew = updates.status !== undefined && updates.status !== TaskStatus.TO_DO;
-    const updatedFields = { 
+    const updatedFields: any = {
       ...updates, 
       is_new: willClearNew ? false : targetTask.is_new,
       updated_at: new Date().toISOString() 
     };
+
+    if (modifier && modifier.id !== targetTask.owner_id) {
+      updatedFields.last_modified_by_id = modifier.id;
+      updatedFields.last_modified_by_name = modifier.name;
+    }
+
     await updateDoc(taskRef, updatedFields);
 
     return this.normalizeTask({ ...targetTask, ...updatedFields });
@@ -697,20 +702,25 @@ export class TaskService {
     return ids;
   }
 
-  static async reorderTask(taskId: string, targetStatus: TaskStatus, targetIndex: number): Promise<Task | null> {
+  static async reorderTask(taskId: string, targetStatus: TaskStatus, targetIndex: number, modifier?: User): Promise<Task | null> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
     if (!taskDoc.exists()) return null;
 
     const task = { ...taskDoc.data(), id: taskDoc.id } as Task;
     
-    let updatedTask = { 
+    let updatedTask: any = {
       ...task, 
       status: targetStatus, 
       updated_at: new Date().toISOString(),
       is_new: targetStatus === TaskStatus.TO_DO ? task.is_new : false,
       is_closed: targetStatus === TaskStatus.DONE ? task.is_closed : false
     };
+
+    if (modifier && modifier.id !== task.owner_id) {
+      updatedTask.last_modified_by_id = modifier.id;
+      updatedTask.last_modified_by_name = modifier.name;
+    }
     
     if (targetStatus === TaskStatus.IN_PROGRESS && task.status !== TaskStatus.IN_PROGRESS) {
       updatedTask.in_progress_started_at = new Date().toISOString();
@@ -734,8 +744,8 @@ export class TaskService {
     return this.normalizeTask(updatedTask);
   }
 
-  static async updateTaskStatus(taskId: string, newStatus: TaskStatus): Promise<Task | null> {
-    return await this.reorderTask(taskId, newStatus, 0); // index doesn't matter much in current impl
+  static async updateTaskStatus(taskId: string, newStatus: TaskStatus, modifier?: User): Promise<Task | null> {
+    return await this.reorderTask(taskId, newStatus, 0, modifier); // index doesn't matter much in current impl
   }
 
   static async pauseTimer(taskId: string): Promise<Task | null> {

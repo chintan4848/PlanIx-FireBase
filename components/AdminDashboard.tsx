@@ -107,8 +107,22 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ language }) => {
   // Simulate real-time logs
   useEffect(() => {
     const fetchActivities = async () => {
-      const flattened = await AuthService.getRecentActivities(15);
-      setAllActivities(flattened);
+      try {
+        const flattened = await AuthService.getRecentActivities(15);
+        setAllActivities(flattened);
+      } catch (err: any) {
+        console.error("Telemetry failure:", err);
+        // Silently fail or show minimal log if it's a known index issue
+        if (err.message?.includes('index')) {
+          setAllActivities([{
+            id: 'err',
+            userId: 'SYS',
+            action: 'Telemetry Index Missing. Provisioning required.',
+            timestamp: new Date().toISOString(),
+            type: 'system'
+          }]);
+        }
+      }
     };
     fetchActivities();
   }, [users]);

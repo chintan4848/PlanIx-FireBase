@@ -65,6 +65,8 @@ export interface Task {
   is_timer_paused: boolean;
   is_new?: boolean;
   is_closed?: boolean;
+  last_modified_by_id?: string;
+  last_modified_by_name?: string;
 }
 
 // --- CommitGuard Types ---
