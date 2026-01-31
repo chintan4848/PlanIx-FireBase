@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, setDoc, query, where, getDocs, updateDoc, deleteDoc, writeBatch, or } from "firebase/firestore";
+import { collection, doc, getDoc, setDoc, query, where, getDocs, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
 import { db } from "../src/firebase";
 import { Task, TaskStatus, TaskPriority, Project, User, ActivityLog, CommitNode, CommitLock, CommitAudit, CommitSubNode } from '../types';
 import { GoogleGenAI } from "@google/genai";
@@ -112,10 +112,9 @@ export class AuthService {
     const isRootAdmin = currentUser.id === M_ID;
     const isLocalAdmin = isAdminRole(currentUser.role);
 
-    if (isRootAdmin) return users.filter(u => u.id !== M_ID);
-
-    if (isLocalAdmin) {
-      return users.filter(u => u.id !== M_ID && isAdminRole(u.role));
+    if (isRootAdmin || isLocalAdmin) {
+      // Master and Admins can see all users except the Master Admin itself
+      return users.filter(u => u.id !== M_ID);
     }
 
     return users.filter(u => u.id === currentUser.id);
@@ -160,31 +159,25 @@ export class AuthService {
   }
 
   static async getActivities(userId: string): Promise<ActivityLog[]> {
-    const currentUser = await this.getCurrentUser();
+    const currentUser = await AuthService.getCurrentUser();
     if (!currentUser) return [];
 
     const isRootAdmin = currentUser.id === M_ID;
     const isLocalAdmin = isAdminRole(currentUser.role);
 
-    // Master sees everything
-    if (isRootAdmin) {
-      const activitiesCol = collection(db, "users", userId, "activities");
-      const activitySnapshot = await getDocs(activitiesCol);
-      return activitySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as ActivityLog));
-    }
-
-    // Normal users see only their own
-    if (!isLocalAdmin) {
-      if (userId !== currentUser.id) return [];
-    } else {
-      // Local admins see only other admins
-      const targetUserRef = doc(db, "users", userId);
-      const targetUserSnap = await getDoc(targetUserRef);
-      if (targetUserSnap.exists()) {
-        const targetUser = targetUserSnap.data() as User;
-        if (!isAdminRole(targetUser.role)) return [];
-      } else if (userId !== M_ID) {
-        return [];
+    // Normal users see only their own; Local Admins see only other Admins; Master sees everyone.
+    if (!isRootAdmin) {
+      if (!isLocalAdmin) {
+        if (userId !== currentUser.id) return [];
+      } else {
+        const targetUserRef = doc(db, "users", userId);
+        const targetUserSnap = await getDoc(targetUserRef);
+        if (targetUserSnap.exists()) {
+          const targetUser = targetUserSnap.data() as User;
+          if (!isAdminRole(targetUser.role)) return [];
+        } else if (userId !== M_ID) {
+          return [];
+        }
       }
     }
 
