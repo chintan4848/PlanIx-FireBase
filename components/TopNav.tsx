@@ -20,8 +20,9 @@ import {
   EyeOff,
   LogOut
 } from 'lucide-react';
-import { TaskPriority, Language } from '../types';
+import { TaskPriority, Language, User } from '../types';
 import { translations } from '../translations';
+import { Users } from 'lucide-react';
 
 interface TopNavProps {
   projectName: string;
@@ -40,9 +41,13 @@ interface TopNavProps {
   language: Language;
   onToggleLanguage: () => void;
   userName: string;
+  currentUser: User | null;
+  users: User[];
   hasTasks: boolean;
   filterPriority: TaskPriority | 'All';
   onFilterPriority: (p: TaskPriority | 'All') => void;
+  filterUserId: string | 'All';
+  onFilterUser: (id: string | 'All') => void;
   showClosed: boolean;
   onToggleClosed: () => void;
   activeTab: 'board' | 'analytics' | 'developers' | 'profile' | 'admin';
@@ -66,9 +71,13 @@ const TopNav: React.FC<TopNavProps> = ({
   language,
   onToggleLanguage,
   userName,
+  currentUser,
+  users,
   hasTasks,
   filterPriority,
   onFilterPriority,
+  filterUserId,
+  onFilterUser,
   showClosed,
   onToggleClosed,
   activeTab,
@@ -79,6 +88,7 @@ const TopNav: React.FC<TopNavProps> = ({
   const [isCopied, setIsCopied] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [isUserFilterOpen, setIsUserFilterOpen] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
   const [searchValue, setSearchValue] = useState('');
@@ -86,6 +96,7 @@ const TopNav: React.FC<TopNavProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLDivElement>(null);
+  const userFilterRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const t = translations[language].nav;
@@ -102,6 +113,9 @@ const TopNav: React.FC<TopNavProps> = ({
       }
       if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
         setIsFilterOpen(false);
+      }
+      if (userFilterRef.current && !userFilterRef.current.contains(event.target as Node)) {
+        setIsUserFilterOpen(false);
       }
     };
     
@@ -281,6 +295,54 @@ const TopNav: React.FC<TopNavProps> = ({
               </div>
             )}
           </div>
+
+          {(currentUser?.role === 'Admin' || currentUser?.role === 'Project Leader' || currentUser?.role === 'Team Lead') && (
+            <div className="relative" ref={userFilterRef}>
+              <button
+                onClick={() => setIsUserFilterOpen(!isUserFilterOpen)}
+                className={`p-2.5 rounded-xl border transition-all flex items-center gap-2 ${
+                  filterUserId !== 'All'
+                  ? 'bg-indigo-600 text-white border-indigo-500 shadow-md'
+                  : 'bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-slate-200 dark:border-slate-800 hover:border-slate-300 shadow-sm'
+                }`}
+              >
+                <Users size={16} />
+                {filterUserId !== 'All' && (
+                  <span className="text-[10px] font-black uppercase tracking-widest truncate max-w-[80px]">
+                    {users.find(u => u.id === filterUserId)?.name || 'User'}
+                  </span>
+                )}
+              </button>
+
+              {isUserFilterOpen && (
+                <div className="absolute left-0 top-full mt-2 w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl overflow-hidden z-50 animate-in zoom-in-95 duration-150">
+                  <div className="p-1.5 space-y-0.5">
+                    <p className="px-3 py-1.5 text-[9px] font-black text-slate-400 uppercase tracking-widest">Filter by User</p>
+                    <button
+                      onClick={() => { onFilterUser('All'); setIsUserFilterOpen(false); }}
+                      className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-[11px] font-bold uppercase transition-all ${filterUserId === 'All' ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
+                    >
+                      All Users
+                    </button>
+                    <div className="max-h-60 overflow-y-auto scrollbar-hide">
+                      {users.map((u) => (
+                        <button
+                          key={u.id}
+                          onClick={() => { onFilterUser(u.id); setIsUserFilterOpen(false); }}
+                          className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-[11px] font-bold uppercase transition-all ${
+                            filterUserId === u.id ? 'bg-indigo-600 text-white' : 'text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          }`}
+                        >
+                          <img src={u.avatar} className="w-5 h-5 rounded-full object-cover" alt="" />
+                          <span className="truncate">{u.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

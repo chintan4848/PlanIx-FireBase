@@ -126,13 +126,9 @@ export class AuthService {
     const isRootAdmin = currentUser.id === M_ID;
     const isLocalAdmin = isAdminRole(currentUser.role);
 
-    if (isRootAdmin) {
+    if (isRootAdmin || isLocalAdmin) {
+      // Root and local admins see all users in the registry (excluding Master Admin itself)
       return users.filter(u => u.id !== M_ID);
-    }
-
-    if (isLocalAdmin) {
-      // Local admins see only other administrative identities
-      return users.filter(u => isAdminRole(u.role) && u.id !== M_ID);
     }
 
     return users.filter(u => u.id === currentUser.id);
@@ -425,13 +421,8 @@ export class TaskService {
     const isRootAdmin = currentUser.id === M_ID;
     const isLocalAdmin = isAdminRole(currentUser.role);
 
-    if (isRootAdmin) return allTasks;
-
-    if (isLocalAdmin) {
-      const users = await AuthService.getUsers();
-      const adminIds = users.map(u => u.id);
-      return allTasks.filter(t => adminIds.includes(t.owner_id) || t.assignee_id === currentUser.id);
-    }
+    // Root and local admins see all tasks in the system
+    if (isRootAdmin || isLocalAdmin) return allTasks;
 
     return allTasks.filter(t => t.owner_id === currentUser.id || t.assignee_id === currentUser.id);
   }
@@ -447,13 +438,8 @@ export class TaskService {
     const isRootAdmin = currentUser.id === M_ID;
     const isLocalAdmin = isAdminRole(currentUser.role);
 
-    if (isRootAdmin) return allTasks;
-
-    if (isLocalAdmin) {
-      const users = await AuthService.getUsers();
-      const adminIds = users.map(u => u.id);
-      return allTasks.filter(t => adminIds.includes(t.owner_id) || t.assignee_id === currentUser.id);
-    }
+    // Root and local admins see all tasks for administrative purposes
+    if (isRootAdmin || isLocalAdmin) return allTasks;
 
     return allTasks.filter(t => t.owner_id === currentUser.id || t.assignee_id === currentUser.id);
   }
@@ -526,18 +512,8 @@ export class TaskService {
     const isRootAdmin = currentUser.id === M_ID;
     const isLocalAdmin = isAdminRole(currentUser.role);
 
-    if (isRootAdmin) return allTasks;
-
-    if (isLocalAdmin) {
-      const users = await AuthService.getUsers();
-      const adminIds = new Set(users.map(u => u.id));
-      // Admins see tasks owned by any admin OR assigned to themselves OR owned by themselves
-      return allTasks.filter(t =>
-        adminIds.has(t.owner_id) ||
-        t.assignee_id === currentUser.id ||
-        t.owner_id === currentUser.id
-      );
-    }
+    // Root and local admins see all tasks within the specified project
+    if (isRootAdmin || isLocalAdmin) return allTasks;
 
     // Members see only their own tasks (owned or assigned)
     return allTasks.filter(t => t.owner_id === currentUser.id || t.assignee_id === currentUser.id);
