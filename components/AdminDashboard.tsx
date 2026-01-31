@@ -107,16 +107,10 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ language }) => {
   // Simulate real-time logs
   useEffect(() => {
     const fetchActivities = async () => {
-      const activityPromises = users.map(u => AuthService.getActivities(u.id));
-      const activityResults = await Promise.all(activityPromises);
-      const flattened = activityResults.flat()
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-        .slice(0, 15);
+      const flattened = await AuthService.getRecentActivities(15);
       setAllActivities(flattened);
     };
-    if (users.length > 0) {
-      fetchActivities();
-    }
+    fetchActivities();
   }, [users]);
 
   useEffect(() => {
