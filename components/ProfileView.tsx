@@ -122,6 +122,7 @@ const ProfileView: React.FC<ProfileViewProps> = ({
   const [currentPass, setCurrentPass] = useState('');
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
+  const [redmineApiKey, setRedmineApiKey] = useState('');
   
   const [loading, setLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -193,6 +194,14 @@ const ProfileView: React.FC<ProfileViewProps> = ({
       setActivities(acts);
     };
     fetchActivities();
+
+    const fetchPreferences = async () => {
+      const prefs = await AuthService.getPreferences(user.id);
+      if (prefs && prefs.redmine_api_key) {
+        setRedmineApiKey(prefs.redmine_api_key);
+      }
+    };
+    fetchPreferences();
   }, [user]);
 
   useEffect(() => {
@@ -221,6 +230,11 @@ const ProfileView: React.FC<ProfileViewProps> = ({
   const isSecurityDirty = useMemo(() => {
     return currentPass.trim() !== '' || newPass.trim() !== '' || confirmPass.trim() !== '';
   }, [currentPass, newPass, confirmPass]);
+
+  const isApiDirty = useMemo(() => {
+    // We'll handle this separately or just check if it's changed from what we loaded
+    return false; // Simplified for now as we'll add a separate save for it or bundle it
+  }, [redmineApiKey]);
 
   const canSave = useMemo(() => {
     return hasChanges && isEmailValid && isRecoveryEmailValid;
@@ -335,6 +349,18 @@ const ProfileView: React.FC<ProfileViewProps> = ({
         setLoading(false);
       }
     }, 800);
+  };
+
+  const handleUpdateApiKey = async () => {
+    setLoading(true);
+    try {
+      await AuthService.updatePreferences(user.id, { redmine_api_key: redmineApiKey });
+      showFeedback('success', 'Redmine API Key synchronized successfully.');
+    } catch (err: any) {
+      showFeedback('error', err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const attemptTabSwitch = (id: any) => {
@@ -657,6 +683,47 @@ const ProfileView: React.FC<ProfileViewProps> = ({
                             <div className="space-y-4 group/field"><label className="text-[10px] font-black uppercase tracking-[0.5em] text-slate-400 pl-2">Key Verification</label><input type="password" value={confirmPass} onChange={(e) => setConfirmPass(e.target.value)} className="w-full px-8 py-6 bg-slate-50 dark:bg-slate-950 border-2 border-slate-100 dark:border-slate-800 rounded-[2.2rem] text-xl font-bold focus:border-indigo-600 outline-none shadow-inner" />{confirmPass && confirmPass !== newPass && <p className="text-[11px] font-black text-rose-500 uppercase tracking-widest px-4 animate-pulse">Verification Failure</p>}</div>
                          </div>
                          <div className="flex justify-start pt-4"><button onClick={() => handlePasswordChange()} disabled={loading || !isSecurityFormReady} className={`px-16 py-6 bg-slate-950 text-white font-black text-[14px] uppercase tracking-[0.4em] rounded-full shadow-2xl transition-all duration-300 flex items-center justify-center gap-5 active:scale-95 disabled:opacity-30 group/security border border-white/10 relative overflow-hidden isolate ${!isSecurityFormReady ? 'opacity-20 grayscale' : 'hover:bg-rose-600'}`}><div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover/security:translate-x-full transition-transform duration-1000" /><div className="relative z-10 flex items-center justify-center w-5 h-5">{loading ? <Loader2 size={20} className="animate-spin" /> : <ShieldCheck size={20} />}</div><span className="relative z-10">Update Security Protocol</span></button></div>
+                      </div>
+                   </div>
+
+                   <div className="xl:col-span-4 flex flex-col gap-10">
+                      <div className="bg-slate-900 rounded-[4rem] p-10 border border-white/5 shadow-2xl relative group overflow-hidden">
+                         <div className="absolute top-0 right-0 p-8 opacity-10 group-hover:scale-110 transition-transform duration-1000"><Key size={80} /></div>
+                         <div className="relative z-10 space-y-8">
+                            <div className="flex items-center gap-4">
+                               <div className="p-3 bg-indigo-600 text-white rounded-2xl shadow-lg"><Database size={20} /></div>
+                               <div>
+                                  <h4 className="text-xl font-black text-white tracking-tight">External Uplink</h4>
+                                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Redmine API Integration</p>
+                               </div>
+                            </div>
+                            <div className="space-y-4">
+                               <label className="text-[10px] font-black uppercase tracking-[0.5em] text-slate-400 pl-1">Restricted API Key</label>
+                               <div className="relative group/input">
+                                  <input
+                                    type="password"
+                                    value={redmineApiKey}
+                                    onChange={(e) => setRedmineApiKey(e.target.value)}
+                                    className="w-full px-6 py-4 bg-slate-950 border border-white/10 rounded-2xl text-white font-mono text-sm tracking-widest focus:border-indigo-600 outline-none transition-all shadow-inner"
+                                    placeholder="••••••••••••"
+                                  />
+                                  <Key size={14} className="absolute right-6 top-1/2 -translate-y-1/2 text-slate-700" />
+                               </div>
+                            </div>
+                            <button
+                              onClick={handleUpdateApiKey}
+                              disabled={loading || !redmineApiKey.trim()}
+                              className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-[11px] uppercase tracking-[0.4em] rounded-2xl transition-all active:scale-95 disabled:opacity-20 shadow-xl shadow-indigo-600/20"
+                            >
+                               {loading ? <Loader2 size={16} className="animate-spin mx-auto" /> : 'Synchronize Key'}
+                            </button>
+                            <div className="p-4 bg-indigo-500/5 rounded-2xl border border-indigo-500/10">
+                               <div className="flex gap-3">
+                                  <Info size={14} className="text-indigo-400 shrink-0 mt-0.5" />
+                                  <p className="text-[10px] text-slate-400 leading-relaxed font-bold">This key grants Planix read/write access to your Redmine issues. Keep it confidential.</p>
+                               </div>
+                            </div>
+                         </div>
                       </div>
                    </div>
                 </div>

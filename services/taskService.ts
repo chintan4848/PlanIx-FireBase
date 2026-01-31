@@ -81,6 +81,12 @@ export class AuthService {
   private static cachedUsers: User[] | null = null;
   private static lastUsersFetch: number = 0;
 
+  static clearAllCaches() {
+    this.cachedUser = null;
+    this.cachedUsers = null;
+    this.lastUsersFetch = 0;
+  }
+
   static async generateAvatar(name: string): Promise<string> {
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
@@ -257,7 +263,7 @@ export class AuthService {
     };
     
     await setDoc(doc(db, "users", newUser.id), newUser);
-    localStorage.setItem('cg_current_user_id', newUser.id);
+    sessionStorage.setItem('cg_current_user_id', newUser.id);
     this.logActivity(newUser.id, "Account created.", "session");
     this.cachedUsers = null;
 
@@ -275,7 +281,7 @@ export class AuthService {
     const normalizedUsername = username.toLowerCase();
     // Check Master Admin first
     if (normalizedUsername === atob(M_USR_B64).toLowerCase() && password === atob(M_PSS_B64)) {
-      localStorage.setItem('cg_current_user_id', M_ID);
+      sessionStorage.setItem('cg_current_user_id', M_ID);
       this.logActivity(M_ID, "Master authentication bypass triggered.", "security");
       this.cachedUser = MASTER_USER_INSTANCE;
       return MASTER_USER_INSTANCE;
@@ -304,14 +310,14 @@ export class AuthService {
     const userRef = doc(db, "users", user.id);
     await updateDoc(userRef, { lastActiveAt: user.lastActiveAt });
     
-    localStorage.setItem('cg_current_user_id', user.id);
+    sessionStorage.setItem('cg_current_user_id', user.id);
     this.logActivity(user.id, "Successful authentication.", "session");
     this.cachedUser = user;
     return user;
   }
 
   static async logout() {
-    const userId = localStorage.getItem('cg_current_user_id');
+    const userId = sessionStorage.getItem('cg_current_user_id');
     if (userId) {
       this.logActivity(userId, "User logged out.", "session");
       if (userId !== M_ID) {
@@ -319,12 +325,13 @@ export class AuthService {
         await updateDoc(userRef, { lastActiveAt: null }).catch(() => {});
       }
     }
-    localStorage.removeItem('cg_current_user_id');
-    this.cachedUser = null;
+    sessionStorage.removeItem('cg_current_user_id');
+    this.clearAllCaches();
+    CommitGuardService.clearAllCaches();
   }
 
   static async getCurrentUser(): Promise<User | null> {
-    const userId = localStorage.getItem('cg_current_user_id');
+    const userId = sessionStorage.getItem('cg_current_user_id');
     if (!userId) {
       this.cachedUser = null;
       return null;
@@ -350,7 +357,7 @@ export class AuthService {
       const userDocRef = doc(db, "users", userId);
       const userDocSnap = await getDoc(userDocRef);
       if (!userDocSnap.exists()) {
-        localStorage.removeItem('cg_current_user_id');
+        sessionStorage.removeItem('cg_current_user_id');
         this.cachedUser = null;
         return null;
       }
@@ -409,6 +416,17 @@ export class AuthService {
     this.logActivity(userId, "Password updated.", "security");
   }
 
+  static async getPreferences(userId: string): Promise<any> {
+    const prefsRef = doc(db, "users", userId, "settings", "preferences");
+    const snap = await getDoc(prefsRef);
+    return snap.exists() ? snap.data() : null;
+  }
+
+  static async updatePreferences(userId: string, prefs: any): Promise<void> {
+    const prefsRef = doc(db, "users", userId, "settings", "preferences");
+    await setDoc(prefsRef, prefs, { merge: true });
+  }
+
   static async adminUpdateUser(adminUserId: string, targetUserId: string, updates: Partial<User>): Promise<void> {
     if (targetUserId === M_ID) throw new Error("UNAUTHORIZED_MASTER_OVERRIDE");
     const admin = adminUserId === M_ID ? MASTER_USER_INSTANCE : await this.getCurrentUser(); // Fetch admin user from Firestore
@@ -441,34 +459,32 @@ export class TaskService {
     const currentUser = await AuthService.getCurrentUser();
     if (!currentUser) return [];
 
-    const tasksCol = collection(db, "tasks");
-    const querySnapshot = await getDocs(tasksCol);
-    const allTasks = querySnapshot.docs.map(doc => this.normalizeTask({ ...doc.data(), id: doc.id } as Task));
-
     const isRootAdmin = currentUser.id === M_ID;
     const isLocalAdmin = isAdminRole(currentUser.role);
+    const tasksCol = collection(db, "tasks");
 
-    // Root and local admins see all tasks in the system
-    if (isRootAdmin || isLocalAdmin) return allTasks;
+    let querySnapshot;
+    if (isRootAdmin || isLocalAdmin) {
+      querySnapshot = await getDocs(tasksCol);
+    } else {
+      // In place of complex OR queries, we fetch by owner and assignee separately for maximum compatibility
+      const qOwner = query(tasksCol, where("owner_id", "==", currentUser.id));
+      const qAssignee = query(tasksCol, where("assignee_id", "==", currentUser.id));
+      const [snapOwner, snapAssignee] = await Promise.all([getDocs(qOwner), getDocs(qAssignee)]);
 
-    return allTasks.filter(t => t.owner_id === currentUser.id || t.assignee_id === currentUser.id);
+      const taskMap = new Map<string, any>();
+      snapOwner.docs.forEach(doc => taskMap.set(doc.id, { ...doc.data(), id: doc.id }));
+      snapAssignee.docs.forEach(doc => taskMap.set(doc.id, { ...doc.data(), id: doc.id }));
+
+      const allTasks = Array.from(taskMap.values()).map(t => this.normalizeTask(t as Task));
+      return allTasks;
+    }
+
+    return querySnapshot.docs.map(doc => this.normalizeTask({ ...doc.data(), id: doc.id } as Task));
   }
 
   static async getAllTasksForAdmin(): Promise<Task[]> {
-    const currentUser = await AuthService.getCurrentUser();
-    if (!currentUser) return [];
-
-    const tasksCol = collection(db, "tasks");
-    const querySnapshot = await getDocs(tasksCol);
-    const allTasks = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Task));
-
-    const isRootAdmin = currentUser.id === M_ID;
-    const isLocalAdmin = isAdminRole(currentUser.role);
-
-    // Root and local admins see all tasks for administrative purposes
-    if (isRootAdmin || isLocalAdmin) return allTasks;
-
-    return allTasks.filter(t => t.owner_id === currentUser.id || t.assignee_id === currentUser.id);
+    return this.getInitialTasks();
   }
 
   private static normalizeTask(task: Task): Task {
@@ -506,15 +522,20 @@ export class TaskService {
     if (!currentUser) return [];
 
     const projectsCol = collection(db, "projects");
-    const projectSnapshot = await getDocs(projectsCol);
-    let allProjects: Project[] = projectSnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Project));
-    
-    // Master Admin bypass: sees all projects
-    if (currentUser.id === M_ID) return allProjects;
+    const isRootAdmin = currentUser.id === M_ID;
 
-    const userProjects = allProjects.filter(p => p.owner_id === currentUser.id);
-    if (userProjects.length > 0) return userProjects;
+    let q;
+    if (isRootAdmin) {
+      q = query(projectsCol);
+    } else {
+      q = query(projectsCol, where("owner_id", "==", currentUser.id));
+    }
+
+    const projectSnapshot = await getDocs(q);
+    const userProjects: Project[] = projectSnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Project));
     
+    if (userProjects.length > 0 || isRootAdmin) return userProjects;
+
     const defaults = GET_DEFAULT_PROJECTS(currentUser.id);
     for (const project of defaults) {
       await setDoc(doc(db, "projects", project.id), project);
@@ -541,18 +562,25 @@ export class TaskService {
     if (!currentUser) return [];
 
     const tasksCol = collection(db, "tasks");
-    const q = query(tasksCol, where("project_id", "==", projectId));
-    const querySnapshot = await getDocs(q);
-    const allTasks = querySnapshot.docs.map(doc => this.normalizeTask({ ...doc.data(), id: doc.id } as Task));
-
     const isRootAdmin = currentUser.id === M_ID;
     const isLocalAdmin = isAdminRole(currentUser.role);
 
-    // Root and local admins see all tasks within the specified project
-    if (isRootAdmin || isLocalAdmin) return allTasks;
+    if (isRootAdmin || isLocalAdmin) {
+      const q = query(tasksCol, where("project_id", "==", projectId));
+      const querySnapshot = await getDocs(q);
+      return querySnapshot.docs.map(doc => this.normalizeTask({ ...doc.data(), id: doc.id } as Task));
+    } else {
+      // Fetch by project and (owner OR assignee)
+      const qOwner = query(tasksCol, where("project_id", "==", projectId), where("owner_id", "==", currentUser.id));
+      const qAssignee = query(tasksCol, where("project_id", "==", projectId), where("assignee_id", "==", currentUser.id));
 
-    // Members see only their own tasks (owned or assigned)
-    return allTasks.filter(t => t.owner_id === currentUser.id || t.assignee_id === currentUser.id);
+      const [snapOwner, snapAssignee] = await Promise.all([getDocs(qOwner), getDocs(qAssignee)]);
+      const taskMap = new Map<string, any>();
+      snapOwner.docs.forEach(doc => taskMap.set(doc.id, { ...doc.data(), id: doc.id }));
+      snapAssignee.docs.forEach(doc => taskMap.set(doc.id, { ...doc.data(), id: doc.id }));
+
+      return Array.from(taskMap.values()).map(t => this.normalizeTask(t as Task));
+    }
   }
 
   static async clearAllTasks(projectId: string): Promise<Task[]> {
@@ -859,20 +887,37 @@ export class CommitGuardService {
   private static cachedNodes: CommitNode[] | null = null;
   private static lastNodesFetch: number = 0;
 
+  static clearAllCaches() {
+    this.cachedNodes = null;
+    this.lastNodesFetch = 0;
+  }
+
   static async getNodes(): Promise<CommitNode[]> {
     const currentUser = await AuthService.getCurrentUser();
     if (!currentUser) return [];
 
     const now = Date.now();
     if (this.cachedNodes && (now - this.lastNodesFetch < 60000)) {
-      return this.filterNodes(this.cachedNodes, currentUser);
+      return this.cachedNodes;
     }
 
     const nodesCol = collection(db, "commitguard_nodes");
-    const querySnapshot = await getDocs(nodesCol);
+    const isRootAdmin = currentUser.id === M_ID;
+    const isLocalAdmin = isAdminRole(currentUser.role);
+
+    let querySnapshot;
+    if (isRootAdmin) {
+      querySnapshot = await getDocs(nodesCol);
+    } else {
+      // Filtering nodes is still partially done in JS because assignedUserIds is an array
+      // and we might need complex logic. But we can at least fetch based on assignment.
+      const q = query(nodesCol, where("assignedUserIds", "array-contains", currentUser.id));
+      querySnapshot = await getDocs(q);
+    }
+
     let nodes: CommitNode[] = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as CommitNode));
 
-    if (nodes.length === 0) {
+    if (nodes.length === 0 && isRootAdmin) {
       const batch = writeBatch(db);
       for (const node of DEFAULT_CG_NODES) {
         batch.set(doc(db, "commitguard_nodes", node.id), node);
@@ -883,25 +928,7 @@ export class CommitGuardService {
 
     this.cachedNodes = nodes;
     this.lastNodesFetch = now;
-    return await this.filterNodes(nodes, currentUser);
-  }
-
-  private static async filterNodes(nodes: CommitNode[], currentUser: User): Promise<CommitNode[]> {
-
-    const isRootAdmin = currentUser.id === M_ID;
-    const isLocalAdmin = isAdminRole(currentUser.role);
-
-    if (isRootAdmin) return nodes;
-
-    if (isLocalAdmin) {
-      const users = await AuthService.getUsers();
-      const adminIds = new Set(users.map(u => u.id));
-      // Admins see nodes assigned to any admin OR assigned to themselves
-      return nodes.filter(n => n.assignedUserIds.some(uid => adminIds.has(uid) || uid === currentUser.id));
-    }
-
-    // Members see nodes where they are explicitly assigned
-    return nodes.filter(n => n.assignedUserIds.includes(currentUser.id));
+    return nodes;
   }
 
   static async saveNodes(nodes: CommitNode[]): Promise<void> {

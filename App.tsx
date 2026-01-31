@@ -40,20 +40,17 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const fetchSettings = async () => {
-      const themeDocRef = doc(db, "settings", "theme");
-      const themeDocSnap = await getDoc(themeDocRef);
-      if (themeDocSnap.exists()) {
-        setTheme(themeDocSnap.data().value);
-      }
-
-      const langDocRef = doc(db, "settings", "language");
-      const langDocSnap = await getDoc(langDocRef);
-      if (langDocSnap.exists()) {
-        setLanguage(langDocSnap.data().value);
+      if (!currentUser) return;
+      const settingsRef = doc(db, "users", currentUser.id, "settings", "preferences");
+      const settingsSnap = await getDoc(settingsRef);
+      if (settingsSnap.exists()) {
+        const data = settingsSnap.data();
+        if (data.theme) setTheme(data.theme);
+        if (data.language) setLanguage(data.language);
       }
     };
     fetchSettings();
-  }, []);
+  }, [currentUser]);
 
   useEffect(() => {
     const initializeUser = async () => {
@@ -156,6 +153,9 @@ const App: React.FC = () => {
     setTasks([]);
     setShowLogoutConfirm(false);
     setAppMode('planix');
+    // Reset local UI settings to defaults
+    setTheme('dark');
+    setLanguage('EN');
   };
 
   const handleOverrideRequest = () => {
@@ -189,17 +189,24 @@ const App: React.FC = () => {
     const saveTheme = async () => {
       if (theme === 'dark') document.documentElement.classList.add('dark');
       else document.documentElement.classList.remove('dark');
-      await setDoc(doc(db, "settings", "theme"), { value: theme });
+
+      if (currentUser) {
+        const settingsRef = doc(db, "users", currentUser.id, "settings", "preferences");
+        await setDoc(settingsRef, { theme }, { merge: true });
+      }
     };
     saveTheme();
-  }, [theme]);
+  }, [theme, currentUser]);
 
   useEffect(() => {
     const saveLanguage = async () => {
-      await setDoc(doc(db, "settings", "language"), { value: language });
+      if (currentUser) {
+        const settingsRef = doc(db, "users", currentUser.id, "settings", "preferences");
+        await setDoc(settingsRef, { language }, { merge: true });
+      }
     };
     saveLanguage();
-  }, [language]);
+  }, [language, currentUser]);
 
   const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
   const toggleLanguage = () => setLanguage(prev => prev === 'EN' ? 'JA' : prev === 'JA' ? 'TH' : 'EN');
@@ -293,9 +300,14 @@ const App: React.FC = () => {
         setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
       }
     }
-    const apiKeyDocRef = doc(db, "settings", "redmine_api_key");
-    const apiKeyDocSnap = await getDoc(apiKeyDocRef);
-    const apiKey = apiKeyDocSnap.exists() ? apiKeyDocSnap.data().value : null;
+
+    let apiKey = null;
+    if (currentUser) {
+      const settingsRef = doc(db, "users", currentUser.id, "settings", "preferences");
+      const settingsSnap = await getDoc(settingsRef);
+      apiKey = settingsSnap.exists() ? settingsSnap.data().redmine_api_key : null;
+    }
+
     let finalUrl = url.split('#')[0];
     const separator = finalUrl.includes('?') ? '&' : '?';
     if (apiKey && apiKey.trim().length > 5) finalUrl += `${separator}key=${apiKey.trim()}`;
