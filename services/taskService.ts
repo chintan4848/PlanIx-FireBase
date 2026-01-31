@@ -123,13 +123,16 @@ export class AuthService {
   }
 
   private static filterUsers(users: User[], currentUser: User): User[] {
-
-    // Filter based on role: Admins see all users except the Master Admin itself
     const isRootAdmin = currentUser.id === M_ID;
     const isLocalAdmin = isAdminRole(currentUser.role);
 
-    if (isRootAdmin || isLocalAdmin) {
+    if (isRootAdmin) {
       return users.filter(u => u.id !== M_ID);
+    }
+
+    if (isLocalAdmin) {
+      // Local admins see only other administrative identities
+      return users.filter(u => isAdminRole(u.role) && u.id !== M_ID);
     }
 
     return users.filter(u => u.id === currentUser.id);
@@ -617,35 +620,33 @@ export class TaskService {
     return await this.getTasks(projectId);
   }
 
-  static async markAsViewed(taskId: string): Promise<Task[]> {
+  static async markAsViewed(taskId: string): Promise<Task | null> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists()) return [];
-    if (!(taskDoc.data() as Task).is_new) return await this.getTasks((taskDoc.data() as Task).project_id);
+    if (!taskDoc.exists()) return null;
+    const taskData = taskDoc.data() as Task;
+    if (!taskData.is_new) return this.normalizeTask({ ...taskData, id: taskDoc.id });
 
-    await updateDoc(taskRef, { is_new: false });
-    const updatedTask = { ...taskDoc.data(), id: taskDoc.id, is_new: false } as Task;
-
-    return await this.getTasks(updatedTask.project_id);
+    const updates = { is_new: false };
+    await updateDoc(taskRef, updates);
+    return this.normalizeTask({ ...taskData, id: taskDoc.id, ...updates });
   }
 
-  static async deleteTask(taskId: string): Promise<Task[]> {
+  static async deleteTask(taskId: string): Promise<string | null> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists()) return [];
+    if (!taskDoc.exists()) return null;
 
-    const projectId = (taskDoc.data() as Task).project_id;
     await deleteDoc(taskRef);
-    return await this.getTasks(projectId);
+    return taskId;
   }
 
-  static async updateTask(taskId: string, updates: Partial<Task>): Promise<Task[]> {
+  static async updateTask(taskId: string, updates: Partial<Task>): Promise<Task | null> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists()) return [];
+    if (!taskDoc.exists()) return null;
 
     const targetTask = { ...taskDoc.data(), id: taskDoc.id } as Task;
-    const projectId = targetTask.project_id;
 
     const willClearNew = updates.status !== undefined && updates.status !== TaskStatus.TO_DO;
     const updatedFields = { 
@@ -655,34 +656,35 @@ export class TaskService {
     };
     await updateDoc(taskRef, updatedFields);
 
-    return await this.getTasks(projectId);
+    return this.normalizeTask({ ...targetTask, ...updatedFields });
   }
 
-  static async closeTask(taskId: string, closed: boolean): Promise<Task[]> {
+  static async closeTask(taskId: string, closed: boolean): Promise<Task | null> {
     return await this.updateTask(taskId, { is_closed: closed });
   }
 
-  static async closeAllDoneTasks(projectId: string): Promise<Task[]> {
+  static async closeAllDoneTasks(projectId: string): Promise<string[]> {
     const tasksCol = collection(db, "tasks");
     const q = query(tasksCol, where("project_id", "==", projectId), where("status", "==", TaskStatus.DONE));
     const querySnapshot = await getDocs(q);
 
     const batch = writeBatch(db);
+    const ids: string[] = [];
     querySnapshot.docs.forEach(docSnap => {
       batch.update(docSnap.ref, { is_closed: true, updated_at: new Date().toISOString() });
+      ids.push(docSnap.id);
     });
     await batch.commit();
 
-    return await this.getTasks(projectId);
+    return ids;
   }
 
-  static async reorderTask(taskId: string, targetStatus: TaskStatus, targetIndex: number): Promise<Task[]> {
+  static async reorderTask(taskId: string, targetStatus: TaskStatus, targetIndex: number): Promise<Task | null> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists()) return [];
+    if (!taskDoc.exists()) return null;
 
     const task = { ...taskDoc.data(), id: taskDoc.id } as Task;
-    const projectId = task.project_id;
     
     let updatedTask = { 
       ...task, 
@@ -711,59 +713,51 @@ export class TaskService {
 
     await updateDoc(taskRef, updatedTask);
 
-    return await this.getTasks(projectId);
+    return this.normalizeTask(updatedTask);
   }
 
-  static async updateTaskStatus(taskId: string, newStatus: TaskStatus): Promise<Task[]> {
-    const taskRef = doc(db, "tasks", taskId);
-    const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists()) return [];
-
-    const targetTask = { ...taskDoc.data(), id: taskDoc.id } as Task;
-    const projectId = targetTask.project_id;
-
-    // To find the target index (append to end), we need tasks for this project and status
-    const tasksCol = collection(db, "tasks");
-    const q = query(tasksCol, where("project_id", "==", projectId), where("status", "==", newStatus));
-    const querySnapshot = await getDocs(q);
-
-    return await this.reorderTask(taskId, newStatus, querySnapshot.size);
+  static async updateTaskStatus(taskId: string, newStatus: TaskStatus): Promise<Task | null> {
+    return await this.reorderTask(taskId, newStatus, 0); // index doesn't matter much in current impl
   }
 
-  static async pauseTimer(taskId: string): Promise<Task[]> {
+  static async pauseTimer(taskId: string): Promise<Task | null> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists()) return [];
+    if (!taskDoc.exists()) return null;
 
     const task = { ...taskDoc.data(), id: taskDoc.id } as Task;
+    let updatedFields = {};
 
     if (task.status === TaskStatus.IN_PROGRESS && !task.is_timer_paused) {
       const elapsed = Math.floor((Date.now() - new Date(task.in_progress_started_at!).getTime()) / 1000);
-      await updateDoc(taskRef, {
+      updatedFields = {
         is_timer_paused: true,
         total_work_seconds: task.total_work_seconds + elapsed,
         in_progress_started_at: null,
         updated_at: new Date().toISOString()
-      });
+      };
+      await updateDoc(taskRef, updatedFields);
     }
-    return await this.getTasks(task.project_id);
+    return this.normalizeTask({ ...task, ...updatedFields });
   }
 
-  static async resumeTimer(taskId: string): Promise<Task[]> {
+  static async resumeTimer(taskId: string): Promise<Task | null> {
     const taskRef = doc(db, "tasks", taskId);
     const taskDoc = await getDoc(taskRef);
-    if (!taskDoc.exists()) return [];
+    if (!taskDoc.exists()) return null;
 
     const task = { ...taskDoc.data(), id: taskDoc.id } as Task;
+    let updatedFields = {};
 
     if (task.status === TaskStatus.IN_PROGRESS && task.is_timer_paused) {
-      await updateDoc(taskRef, {
+      updatedFields = {
         is_timer_paused: false,
         in_progress_started_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
-      });
+      };
+      await updateDoc(taskRef, updatedFields);
     }
-    return await this.getTasks(task.project_id);
+    return this.normalizeTask({ ...task, ...updatedFields });
   }
 
   static async toggleAllTimers(projectId: string, resume: boolean): Promise<Task[]> {
@@ -772,27 +766,32 @@ export class TaskService {
     const querySnapshot = await getDocs(q);
 
     const batch = writeBatch(db);
+    const updatedTasks: Task[] = [];
     querySnapshot.docs.forEach(docSnap => {
       const task = { ...docSnap.data(), id: docSnap.id } as Task;
+      let fields: any = {};
       if (!resume && !task.is_timer_paused) {
         const elapsed = Math.floor((Date.now() - new Date(task.in_progress_started_at!).getTime()) / 1000);
-        batch.update(docSnap.ref, {
+        fields = {
           is_timer_paused: true,
           total_work_seconds: task.total_work_seconds + elapsed,
           in_progress_started_at: null,
           updated_at: new Date().toISOString()
-        });
+        };
+        batch.update(docSnap.ref, fields);
       } else if (resume && task.is_timer_paused) {
-        batch.update(docSnap.ref, {
+        fields = {
           is_timer_paused: false,
           in_progress_started_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
-        });
+        };
+        batch.update(docSnap.ref, fields);
       }
+      updatedTasks.push(this.normalizeTask({ ...task, ...fields }));
     });
     await batch.commit();
 
-    return await this.getTasks(projectId);
+    return updatedTasks;
   }
 
   static async getFullStateExport(): Promise<string> {
