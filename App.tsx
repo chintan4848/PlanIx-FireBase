@@ -30,6 +30,7 @@ const App: React.FC = () => {
   const [activeProjectId, setActiveProjectId] = useState('');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [filterUserId, setFilterUserId] = useState<string | 'All'>('All');
   const [filterPriority, setFilterPriority] = useState<TaskPriority | 'All'>('All');
   const [showClosed, setShowClosed] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>('dark');
@@ -516,9 +517,10 @@ const App: React.FC = () => {
   const filteredTasks = useMemo(() => tasks.filter(t => {
     const matchesSearch = t.title.toLowerCase().includes(searchQuery.toLowerCase()) || t.external_id.toString().includes(searchQuery);
     const matchesPriority = filterPriority === 'All' || t.priority === filterPriority;
+    const matchesUser = filterUserId === 'All' || t.owner_id === filterUserId || t.assignee_id === filterUserId;
     const matchesClosed = showClosed || !t.is_closed;
-    return matchesSearch && matchesPriority && matchesClosed;
-  }), [tasks, searchQuery, filterPriority, showClosed]);
+    return matchesSearch && matchesPriority && matchesUser && matchesClosed;
+  }), [tasks, searchQuery, filterPriority, filterUserId, showClosed]);
 
   const handleCopyAllTasks = () => {
     if (filteredTasks.length === 0) return;
@@ -932,8 +934,16 @@ const App: React.FC = () => {
           onNewTask={() => { setError(null); setShowNewTaskModal(true); }} onSearch={setSearchQuery} onCopyAll={handleCopyAllTasks}
           sidebarOpen={isSidebarOpen} onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)} theme={theme} onToggleTheme={toggleTheme}
           language={language} onToggleLanguage={toggleLanguage}
-          userName={currentUser?.name || 'User'} hasTasks={filteredTasks.length > 0} filterPriority={filterPriority} onFilterPriority={setFilterPriority}
-          showClosed={showClosed} onToggleClosed={() => setShowClosed(!showClosed)}
+          userName={currentUser?.name || 'User'}
+          currentUser={currentUser}
+          users={users}
+          hasTasks={filteredTasks.length > 0}
+          filterPriority={filterPriority}
+          onFilterPriority={setFilterPriority}
+          filterUserId={filterUserId}
+          onFilterUser={setFilterUserId}
+          showClosed={showClosed}
+          onToggleClosed={() => setShowClosed(!showClosed)}
           activeTab={activeTab}
           onLogout={handleLogoutRequest}
         />
