@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, setDoc, query, where, getDocs, updateDoc, deleteDoc, writeBatch, collectionGroup, orderBy, limit } from "firebase/firestore";
+import { collection, doc, getDoc, setDoc, query, where, getDocs, updateDoc, deleteDoc, writeBatch, collectionGroup, orderBy, limit, onSnapshot, Unsubscribe, or, and } from "firebase/firestore";
 import { db } from "../src/firebase";
 import { Task, TaskStatus, TaskPriority, Project, User, ActivityLog, CommitNode, CommitLock, CommitAudit, CommitSubNode } from '../types';
 import { GoogleGenAI } from "@google/genai";
@@ -492,6 +492,49 @@ export class TaskService {
     return this.getInitialTasks();
   }
 
+  static subscribeToProjects(user: User, callback: (projects: Project[]) => void): Unsubscribe {
+    const projectsCol = collection(db, "projects");
+    const isRootAdmin = user.id === M_ID;
+
+    let q;
+    if (isRootAdmin || isAdminRole(user.role)) {
+      q = query(projectsCol);
+    } else {
+      q = query(projectsCol, where("owner_id", "==", user.id));
+    }
+
+    return onSnapshot(q, (snapshot) => {
+      const projects = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Project));
+      callback(projects);
+    });
+  }
+
+  static subscribeToTasks(projectId: string, user: User, callback: (tasks: Task[]) => void): Unsubscribe {
+    const tasksCol = collection(db, "tasks");
+    const isRootAdmin = user.id === M_ID;
+    const isLocalAdmin = isAdminRole(user.role);
+
+    let q;
+    if (isRootAdmin || isLocalAdmin) {
+      q = query(tasksCol, where("project_id", "==", projectId));
+    } else {
+      q = query(tasksCol,
+        and(
+          where("project_id", "==", projectId),
+          or(
+            where("owner_id", "==", user.id),
+            where("assignee_id", "==", user.id)
+          )
+        )
+      );
+    }
+
+    return onSnapshot(q, (snapshot) => {
+      const tasks = snapshot.docs.map(doc => this.normalizeTask({ ...doc.data(), id: doc.id } as Task));
+      callback(tasks);
+    });
+  }
+
   private static normalizeTask(task: Task): Task {
     return {
       ...task,
@@ -897,6 +940,41 @@ export class TaskService {
 // --- CommitGuard Logic Engine ---
 
 export class CommitGuardService {
+  static subscribeToNodes(user: User, callback: (nodes: CommitNode[]) => void): Unsubscribe {
+    const nodesCol = collection(db, "commitguard_nodes");
+    const isRootAdmin = user.id === M_ID;
+    const isLocalAdmin = isAdminRole(user.role);
+
+    let q;
+    if (isRootAdmin || isLocalAdmin) {
+      q = query(nodesCol);
+    } else {
+      q = query(nodesCol, where("assignedUserIds", "array-contains", user.id));
+    }
+
+    return onSnapshot(q, (snapshot) => {
+      const nodes = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as CommitNode));
+      callback(nodes);
+    });
+  }
+
+  static subscribeToLocks(callback: (locks: CommitLock[]) => void): Unsubscribe {
+    const locksCol = collection(db, "commitguard_locks");
+    return onSnapshot(locksCol, (snapshot) => {
+      const locks = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as CommitLock));
+      callback(locks);
+    });
+  }
+
+  static subscribeToAuditArchive(callback: (audits: CommitAudit[]) => void): Unsubscribe {
+    const auditCol = collection(db, "commitguard_audit");
+    const q = query(auditCol, orderBy("timestamp", "desc"), limit(100));
+    return onSnapshot(q, (snapshot) => {
+      const audits = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as CommitAudit));
+      callback(audits);
+    });
+  }
+
   private static cachedNodes: CommitNode[] | null = null;
   private static lastNodesFetch: number = 0;
 
