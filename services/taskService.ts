@@ -74,7 +74,7 @@ const MASTER_USER_INSTANCE: User = {
   lastActiveAt: new Date().toISOString()
 };
 
-const isAdminRole = (role?: string) => role === 'Admin' || role === 'Project Leader' || role === 'Team Lead';
+export const isAdminRole = (role?: string) => role === 'Admin' || role === 'Project Leader' || role === 'Team Lead';
 
 export class AuthService {
   private static cachedUser: User | null = null;
@@ -525,7 +525,7 @@ export class TaskService {
     const isRootAdmin = currentUser.id === M_ID;
 
     let q;
-    if (isRootAdmin) {
+    if (isRootAdmin || isAdminRole(currentUser.role)) {
       q = query(projectsCol);
     } else {
       q = query(projectsCol, where("owner_id", "==", currentUser.id));
@@ -533,7 +533,7 @@ export class TaskService {
 
     const projectSnapshot = await getDocs(q);
     const userProjects: Project[] = projectSnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as Project));
-    
+
     if (userProjects.length > 0 || isRootAdmin) return userProjects;
 
     const defaults = GET_DEFAULT_PROJECTS(currentUser.id);
@@ -587,8 +587,16 @@ export class TaskService {
     const currentUser = await AuthService.getCurrentUser();
     if (!currentUser) return [];
 
+    const isRootAdmin = currentUser.id === M_ID;
+    const isLocalAdmin = isAdminRole(currentUser.role);
     const tasksCol = collection(db, "tasks");
-    const q = query(tasksCol, where("project_id", "==", projectId), where("owner_id", "==", currentUser.id));
+
+    let q;
+    if (isRootAdmin || isLocalAdmin) {
+      q = query(tasksCol, where("project_id", "==", projectId));
+    } else {
+      q = query(tasksCol, where("project_id", "==", projectId), where("owner_id", "==", currentUser.id));
+    }
     const querySnapshot = await getDocs(q);
 
     const batch = writeBatch(db);
@@ -906,7 +914,7 @@ export class CommitGuardService {
     const isLocalAdmin = isAdminRole(currentUser.role);
 
     let querySnapshot;
-    if (isRootAdmin) {
+    if (isRootAdmin || isLocalAdmin) {
       querySnapshot = await getDocs(nodesCol);
     } else {
       // Filtering nodes is still partially done in JS because assignedUserIds is an array
@@ -987,7 +995,8 @@ export class CommitGuardService {
     const allLocks: CommitLock[] = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id } as CommitLock));
 
     const isRootAdmin = currentUser.id === M_ID;
-    if (isRootAdmin) return allLocks;
+    const isLocalAdmin = isAdminRole(currentUser.role);
+    if (isRootAdmin || isLocalAdmin) return allLocks;
 
     // In CommitGuard, locks are visible to anyone who has access to the corresponding node
     const myNodes = await this.getNodes();
