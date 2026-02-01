@@ -20,14 +20,19 @@ import { jsPDF } from 'jspdf';
 import { translations } from './translations';
 
 const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'board' | 'analytics' | 'developers' | 'profile' | 'admin'>('board');
-  const [appMode, setAppMode] = useState<'planix' | 'commitguard'>('planix');
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [activeTab, setActiveTab] = useState<'board' | 'analytics' | 'developers' | 'profile' | 'admin'>(
+    (sessionStorage.getItem('cg_active_tab') as any) || 'board'
+  );
+  const [appMode, setAppMode] = useState<'planix' | 'commitguard'>(
+    (sessionStorage.getItem('cg_app_mode') as any) || 'planix'
+  );
   const [isOverriding, setIsOverriding] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [users, setUsers] = useState<User[]>([]);
-  const [activeProjectId, setActiveProjectId] = useState('');
+  const [activeProjectId, setActiveProjectId] = useState(sessionStorage.getItem('cg_active_project_id') || '');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterUserId, setFilterUserId] = useState<string | 'All'>('All');
@@ -54,16 +59,58 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const initializeUser = async () => {
-      const user = await AuthService.getCurrentUser();
-      setCurrentUser(user);
-      if (user) {
-        const fetchedUsers = await AuthService.getUsers();
-        setUsers(fetchedUsers);
-        loadAll();
+      try {
+        const user = await AuthService.getCurrentUser();
+        setCurrentUser(user);
+        if (user) {
+          const fetchedUsers = await AuthService.getUsers();
+          setUsers(fetchedUsers);
+          // Initial settings and projects loading
+          const settingsRef = doc(db, "users", user.id, "settings", "preferences");
+          const settingsSnap = await getDoc(settingsRef);
+          if (settingsSnap.exists()) {
+            const data = settingsSnap.data();
+            if (data.theme) setTheme(data.theme);
+            if (data.language) setLanguage(data.language);
+          }
+
+          const projs = await TaskService.getProjects();
+          setProjects(projs);
+          if (projs.length > 0) {
+            const savedProjId = sessionStorage.getItem('cg_active_project_id');
+            if (savedProjId && projs.some(p => p.id === savedProjId)) {
+              setActiveProjectId(savedProjId);
+            } else if (!activeProjectId) {
+              setActiveProjectId(projs[0].id);
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Initialization error:", error);
+      } finally {
+        setIsInitializing(false);
       }
     };
     initializeUser();
   }, []);
+
+  useEffect(() => {
+    if (!isInitializing) {
+      sessionStorage.setItem('cg_active_tab', activeTab);
+    }
+  }, [activeTab, isInitializing]);
+
+  useEffect(() => {
+    if (!isInitializing) {
+      sessionStorage.setItem('cg_app_mode', appMode);
+    }
+  }, [appMode, isInitializing]);
+
+  useEffect(() => {
+    if (!isInitializing && activeProjectId) {
+      sessionStorage.setItem('cg_active_project_id', activeProjectId);
+    }
+  }, [activeProjectId, isInitializing]);
   
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
@@ -885,6 +932,7 @@ const App: React.FC = () => {
     );
   };
 
+  if (isInitializing) return <div className="h-screen flex items-center justify-center font-black text-slate-400 text-2xl uppercase tracking-widest animate-pulse bg-slate-950">Planix Loading...</div>;
   if (!currentUser) return <LoginModal language={language} onLogin={handleLogin} />;
   if (appMode === 'commitguard') return <CommitGuardView user={currentUser} onExit={() => setAppMode('planix')} onLogout={executeLogout} language={language} onToggleLanguage={toggleLanguage} />;
   if (!activeProjectId) return <div className="h-screen flex items-center justify-center font-black text-slate-400 text-2xl uppercase tracking-widest animate-pulse bg-slate-950">Planix Loading...</div>;

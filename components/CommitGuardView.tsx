@@ -30,9 +30,25 @@ interface CommitGuardViewProps {
 }
 
 const CommitGuardView: React.FC<CommitGuardViewProps> = ({ user, onExit, onLogout, language, onToggleLanguage }) => {
-  const [activeTab, setActiveTab] = useState<'home' | 'analysis' | 'projects' | 'audit'>('home');
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'home' | 'analysis' | 'projects' | 'audit'>(
+    (sessionStorage.getItem('cg_commitguard_tab') as any) || 'home'
+  );
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    sessionStorage.getItem('cg_commitguard_project_id')
+  );
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  useEffect(() => {
+    sessionStorage.setItem('cg_commitguard_tab', activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (selectedProjectId) {
+      sessionStorage.setItem('cg_commitguard_project_id', selectedProjectId);
+    } else {
+      sessionStorage.removeItem('cg_commitguard_project_id');
+    }
+  }, [selectedProjectId]);
   
   const [nodes, setNodes] = useState<CommitNode[]>([]);
   const [locks, setLocks] = useState<CommitLock[]>([]);

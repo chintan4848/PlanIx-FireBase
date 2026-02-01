@@ -326,6 +326,11 @@ export class AuthService {
       }
     }
     sessionStorage.removeItem('cg_current_user_id');
+    sessionStorage.removeItem('cg_active_tab');
+    sessionStorage.removeItem('cg_app_mode');
+    sessionStorage.removeItem('cg_active_project_id');
+    sessionStorage.removeItem('cg_commitguard_tab');
+    sessionStorage.removeItem('cg_commitguard_project_id');
     this.clearAllCaches();
     CommitGuardService.clearAllCaches();
   }
