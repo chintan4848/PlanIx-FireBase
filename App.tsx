@@ -167,7 +167,6 @@ const App: React.FC = () => {
   const handleLogin = async (user: User) => {
     setCurrentUser(user);
     setUsers(await AuthService.getUsers());
-    loadAll();
     
     const tourKey = `atms_tour_seen_${user.id}`;
     const tourDocRef = doc(db, "users", user.id, "settings", "tour");
@@ -209,28 +208,42 @@ const App: React.FC = () => {
     setAppMode('commitguard');
   };
 
-  const loadAll = useCallback(async () => {
-    if (!currentUser) return;
-    const projs = await TaskService.getProjects();
-    setProjects(projs);
-    if (!activeProjectId && projs.length > 0) {
-      setActiveProjectId(projs[0].id);
+  // Real-time Subscriptions
+  useEffect(() => {
+    if (!currentUser) {
+      setProjects([]);
+      return;
     }
-  }, [activeProjectId, currentUser]);
 
-  const loadTasks = useCallback(async () => {
-    if (activeProjectId && currentUser) {
-      const projectTasks = await TaskService.getTasks(activeProjectId);
-      setTasks([...projectTasks]);
+    const unsubscribe = TaskService.subscribeToProjects(currentUser, (updatedProjects) => {
+      setProjects(updatedProjects);
+
+      // Set initial active project if none selected
+      if (updatedProjects.length > 0) {
+        const savedProjId = sessionStorage.getItem('cg_active_project_id');
+        if (savedProjId && updatedProjects.some(p => p.id === savedProjId)) {
+          setActiveProjectId(savedProjId);
+        } else if (!activeProjectId) {
+          setActiveProjectId(updatedProjects[0].id);
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser || !activeProjectId) {
+      setTasks([]);
+      return;
     }
-  }, [activeProjectId, currentUser]);
 
-  useEffect(() => { 
-    (async () => { await loadAll(); })();
-  }, [loadAll]);
-  useEffect(() => { 
-    (async () => { await loadTasks(); })();
-  }, [loadTasks]);
+    const unsubscribe = TaskService.subscribeToTasks(activeProjectId, currentUser, (updatedTasks) => {
+      setTasks(updatedTasks);
+    });
+
+    return () => unsubscribe();
+  }, [currentUser, activeProjectId]);
 
   useEffect(() => {
     const saveTheme = async () => {
@@ -397,13 +410,9 @@ const App: React.FC = () => {
 
     // Background Update
     try {
-      const updatedTask = await TaskService.updateTaskStatus(taskId, newStatus, currentUser!);
-      if (updatedTask) {
-        setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
-      }
+      await TaskService.updateTaskStatus(taskId, newStatus, currentUser!);
     } catch (err) {
       console.error("Failed to update status:", err);
-      loadTasks();
     }
   };
 
@@ -419,13 +428,9 @@ const App: React.FC = () => {
 
     // Background Update
     try {
-      const updatedTask = await TaskService.updateTask(taskId, { priority: newPriority }, currentUser!);
-      if (updatedTask) {
-        setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
-      }
+      await TaskService.updateTask(taskId, { priority: newPriority }, currentUser!);
     } catch (err) {
       console.error("Failed to update priority:", err);
-      loadTasks();
     }
   };
 
@@ -451,13 +456,9 @@ const App: React.FC = () => {
 
     // Background Update
     try {
-      const updatedTask = await TaskService.pauseTimer(taskId);
-      if (updatedTask) {
-        setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
-      }
+      await TaskService.pauseTimer(taskId);
     } catch (err) {
       console.error("Failed to pause timer:", err);
-      loadTasks();
     }
   };
 
@@ -481,13 +482,9 @@ const App: React.FC = () => {
 
     // Background Update
     try {
-      const updatedTask = await TaskService.resumeTimer(taskId);
-      if (updatedTask) {
-        setTasks(prev => prev.map(t => t.id === taskId ? updatedTask : t));
-      }
+      await TaskService.resumeTimer(taskId);
     } catch (err) {
       console.error("Failed to resume timer:", err);
-      loadTasks();
     }
   };
 
@@ -524,14 +521,9 @@ const App: React.FC = () => {
 
     // Background Update
     try {
-      const updatedTasks = await TaskService.toggleAllTimers(activeProjectId, resume);
-      setTasks(prev => prev.map(t => {
-        const updated = updatedTasks.find(ut => ut.id === t.id);
-        return updated || t;
-      }));
+      await TaskService.toggleAllTimers(activeProjectId, resume);
     } catch (err) {
       console.error("Failed to toggle timers:", err);
-      loadTasks();
     }
   };
 
@@ -968,8 +960,6 @@ const App: React.FC = () => {
                 const content = e.target?.result as string;
                 const parsed = JSON.parse(content);
                 await TaskService.importFullState(parsed);
-                await loadAll();
-                await loadTasks();
                 alert("Workspace Restoration Complete! The page has been updated with the restored data.");
               } catch (err) { 
                 alert("Restoration Failed: The file format is invalid."); 

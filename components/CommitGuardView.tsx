@@ -58,44 +58,26 @@ const CommitGuardView: React.FC<CommitGuardViewProps> = ({ user, onExit, onLogou
   const [isMatrixOpen, setIsMatrixOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const refreshLiveStats = useCallback(async () => {
-    const [l, a] = await Promise.all([
-      CommitGuardService.getLocks(),
-      CommitGuardService.getAuditArchive()
-    ]);
-    setLocks(l);
-    setAudit(a);
-  }, []);
-
-  const refreshNodes = useCallback(async () => {
-    const n = await CommitGuardService.getNodes();
-    setNodes(n);
-  }, []);
-
+  // Real-time Subscriptions
   useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key && e.key.includes('cg_')) {
-        refreshLiveStats();
-        refreshNodes();
-      }
-    };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, [refreshLiveStats, refreshNodes]);
+    const unsubNodes = CommitGuardService.subscribeToNodes(user, (updatedNodes) => {
+      setNodes(updatedNodes);
+    });
 
-  useEffect(() => {
-    const init = async () => {
-      await Promise.all([refreshLiveStats(), refreshNodes()]);
-    };
-    init();
+    const unsubLocks = CommitGuardService.subscribeToLocks((updatedLocks) => {
+      setLocks(updatedLocks);
+    });
 
-    const intervalStats = setInterval(refreshLiveStats, 2000);
-    const intervalNodes = setInterval(refreshNodes, 5000);
+    const unsubAudit = CommitGuardService.subscribeToAuditArchive((updatedAudit) => {
+      setAudit(updatedAudit);
+    });
+
     return () => {
-      clearInterval(intervalStats);
-      clearInterval(intervalNodes);
+      unsubNodes();
+      unsubLocks();
+      unsubAudit();
     };
-  }, [refreshLiveStats, refreshNodes]);
+  }, [user]);
 
   const [allUsers, setAllUsers] = useState<User[]>([]);
   useEffect(() => {
@@ -152,7 +134,6 @@ const CommitGuardView: React.FC<CommitGuardViewProps> = ({ user, onExit, onLogou
       if (type === 'engage') await CommitGuardService.engageNode(selectedProjectId, subNodeId, user);
       else if (type === 'abort') await CommitGuardService.abortSync(subNodeId, user);
       else if (type === 'finalize') await CommitGuardService.finalizeSync(subNodeId, user);
-      await refreshLiveStats();
     } catch (err: any) {
       setError(err.message);
       setTimeout(() => setError(null), 4000);
@@ -161,7 +142,6 @@ const CommitGuardView: React.FC<CommitGuardViewProps> = ({ user, onExit, onLogou
 
   const handleResetRelease = async (nodeId: string) => {
     await CommitGuardService.resetProjectLocks(nodeId, user);
-    await Promise.all([refreshLiveStats(), refreshNodes()]);
   };
 
   const handleToggleDone = async (nodeId: string) => {
@@ -174,12 +154,10 @@ const CommitGuardView: React.FC<CommitGuardViewProps> = ({ user, onExit, onLogou
       const userLock = locks.find(l => l.nodeId === nodeId && l.userId === user.id);
       if (userLock) {
         await CommitGuardService.finalizeSync(userLock.subNodeId, user);
-        await refreshLiveStats();
       }
     }
     
     await CommitGuardService.toggleUserDone(nodeId, user.id);
-    await refreshNodes();
   };
 
   const currentProject = nodes.find(n => n.id === selectedProjectId) || null;
@@ -410,7 +388,7 @@ const CommitGuardView: React.FC<CommitGuardViewProps> = ({ user, onExit, onLogou
 
           {activeTab === 'analysis' && <CommitGuardAnalysis stats={analysisStats} nodes={visibleNodes} />}
           {activeTab === 'home' && !selectedProjectId && <CommitGuardProjectList nodes={filteredNodes} locks={locks} audit={audit} allUsers={allUsers} onSelectProject={setSelectedProjectId} />}
-          {activeTab === 'projects' && <CommitGuardProjects nodes={nodes} currentUser={user} locks={locks} onRefresh={refreshNodes} />}
+          {activeTab === 'projects' && <CommitGuardProjects nodes={nodes} currentUser={user} locks={locks} onRefresh={() => {}} />}
           {selectedProjectId && currentProject && <CommitGuardProjectDetail user={user} project={currentProject} locks={locks} isAiLoading={false} aiBrief={null} onAction={handleAction} />}
           {activeTab === 'audit' && <CommitGuardAudit audit={audit} />}
           
